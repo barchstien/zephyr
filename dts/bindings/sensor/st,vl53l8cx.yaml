@@ -1,0 +1,29 @@
+# Copyright (c) 2026 Bastien Auneau <bastien.auneau@while-true.fr>
+# SPDX-License-Identifier: Apache-2.0
+
+description: STMicroelectronics VL53L8CX Time of Flight sensor
+include: [sensor-device.yaml, i2c-device.yaml]
+compatible: "st,vl53l8cx"
+on-bus: i2c
+
+properties:
+  int-gpios:
+    type: phandle-array
+    description: |
+      An interrupt is raised when a distance measurement is ready.
+      A1 (pin number) GPIO1 (signal name) is the interrupt pin.
+      It is not mandaotry, user can poll instead
+  lpn-gpios:
+    type: phandle-array
+    description: |
+      Enables i2c communication. 0 to disable 1 to enable.
+      This pin is typically used when you need to change
+      the I²C address in multidevice systems. If this pin
+      is not being used, or if it is interfacing via the SPI,
+      connect to IOVDD with a 47 kΩ pullup resistor.
+  sync-gpios:
+    type: phandle-array
+    description: |
+      Optional SYNC input. B1 (pin number) GPIO2 (signal name).
+      General purpose I/O, defaults to open drain output (tristate), 
+      47 kΩ pullup resistor required to IOVDD.
