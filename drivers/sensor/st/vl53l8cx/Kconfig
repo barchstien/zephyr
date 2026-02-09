@@ -1,0 +1,26 @@
+# VL53L8CX time of flight sensor configuration options
+
+# Copyright (c) 2026 Bastien Auneau <bastien.auneau@while-true.fr>
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig VL53L8CX
+	bool "VL53L8CX time of flight sensor"
+	default y
+	depends on DT_HAS_ST_VL53L8CX_ENABLED
+	depends on ZEPHYR_HAL_ST_MODULE
+	select I2C
+	select HAS_STLIB
+	help
+	  Enable driver for VL53L8CX I2C-based time of flight sensor.
+
+if VL53L8CX
+
+config VL53L8CX_INTERRUPT_MODE
+	bool "Use interrupt mode for VL53L8CX time of flight sensor"
+	default y
+	depends on GPIO
+	help
+	  Enable interrupt mode for VL53L8CX time of flight sensor. Otherwise,
+	  the driver will use the polling method.
+
+endif # VL53L8CX
