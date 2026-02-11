@@ -1,18 +1,19 @@
-/* SPDX-License-Identifier: BSD-3-Clause */
-/**
+/** 
+  * ST Microelectronics VL53L8CX ToF sensor
   *
   * Copyright (c) 2021 STMicroelectronics.
   * All rights reserved.
   *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
+  * SPDX-License-Identifier: Apache-2.0
   *
-  ******************************************************************************
+  * Datasheet:
+  * https://www.st.com/resource/en/datasheet/vl53l8cx.pdf
   */
 
+#include "vl53l8cx_platform.h"
 
-#include "platform.h"
+#include <zephyr/drivers/i2c.h>
+#include <zephyr/sys/byteorder.h>
 
 uint8_t VL53L8CX_RdByte(
 		VL53L8CX_Platform *p_platform,
@@ -60,6 +61,14 @@ uint8_t VL53L8CX_RdMulti(
 	uint8_t status = 255;
 	
 	/* Need to be implemented by customer. This function returns 0 if OK */
+	RegisterAdress = sys_cpu_to_be16(RegisterAdress);
+	i2c_write_read_dt(
+		p_platform->i2c, 
+		(uint8_t *)(&RegisterAdress), 
+		2, // index length
+		p_values, 
+		size
+	);
 	
 	return status;
 }

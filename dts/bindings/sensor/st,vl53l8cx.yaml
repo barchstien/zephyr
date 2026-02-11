@@ -7,20 +7,24 @@ compatible: "st,vl53l8cx"
 on-bus: i2c
 
 properties:
+  lpn-gpios:
+    type: phandle-array
+    description: |
+      Enables i2c communication. 0 to disable 1 to enable.
+      Required to perform sensor reset in STM provided driver.
+    required: true
+  pwr-gpios:
+    type: phandle-array
+    description: |
+      Control AVDD, IOVDD and CORE_1V8, which is required to 
+      perform sensor reset in STM provided driver code.
+    required: true
   int-gpios:
     type: phandle-array
     description: |
       An interrupt is raised when a distance measurement is ready.
       A1 (pin number) GPIO1 (signal name) is the interrupt pin.
-      It is not mandaotry, user can poll instead
-  lpn-gpios:
-    type: phandle-array
-    description: |
-      Enables i2c communication. 0 to disable 1 to enable.
-      This pin is typically used when you need to change
-      the I²C address in multidevice systems. If this pin
-      is not being used, or if it is interfacing via the SPI,
-      connect to IOVDD with a 47 kΩ pullup resistor.
+      It is not mandatory, user can poll instead.
   sync-gpios:
     type: phandle-array
     description: |

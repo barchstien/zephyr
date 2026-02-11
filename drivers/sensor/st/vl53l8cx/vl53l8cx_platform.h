@@ -1,19 +1,21 @@
-/* SPDX-License-Identifier: BSD-3-Clause */
-/**
+/** 
+  * ST Microelectronics VL53L8CX ToF sensor
   *
   * Copyright (c) 2021 STMicroelectronics.
   * All rights reserved.
   *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
+  * SPDX-License-Identifier: Apache-2.0
   *
-  ******************************************************************************
+  * Datasheet:
+  * https://www.st.com/resource/en/datasheet/vl53l8cx.pdf
   */
 
 #ifndef _PLATFORM_H_
 #define _PLATFORM_H_
 #pragma once
+
+//#include <zephyr/device.h>
+#include <zephyr/drivers/i2c.h>
 
 #include <stdint.h>
 #include <string.h>
@@ -32,6 +34,8 @@ typedef struct
 	 * needs to be added */
 	/* Example for most standard platform : I2C address of sensor */
     uint16_t  			address;
+	//const struct device* dev;
+	struct i2c_dt_spec*	i2c;
 
 } VL53L8CX_Platform;
 
