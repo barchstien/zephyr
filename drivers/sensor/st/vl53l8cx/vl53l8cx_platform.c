@@ -11,20 +11,21 @@
   */
 
 #include "vl53l8cx_platform.h"
+#include "vl53l8cx_types.h"
 
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
 #include <zephyr/sys/byteorder.h>
+
+LOG_MODULE_REGISTER(VL53L8CX_PLATFORM, CONFIG_SENSOR_LOG_LEVEL);
 
 uint8_t VL53L8CX_RdByte(
 		VL53L8CX_Platform *p_platform,
 		uint16_t RegisterAdress,
 		uint8_t *p_value)
 {
-	uint8_t status = 255;
-	
-	/* Need to be implemented by customer. This function returns 0 if OK */
-
-	return status;
+	return VL53L8CX_RdMulti(p_platform, RegisterAdress, p_value, 1);
 }
 
 uint8_t VL53L8CX_WrByte(
@@ -32,11 +33,7 @@ uint8_t VL53L8CX_WrByte(
 		uint16_t RegisterAdress,
 		uint8_t value)
 {
-	uint8_t status = 255;
-
-	/* Need to be implemented by customer. This function returns 0 if OK */
-
-	return status;
+	return VL53L8CX_WrMulti(p_platform, RegisterAdress, &value, 1);
 }
 
 uint8_t VL53L8CX_WrMulti(
@@ -45,11 +42,21 @@ uint8_t VL53L8CX_WrMulti(
 		uint8_t *p_values,
 		uint32_t size)
 {
-	uint8_t status = 255;
-	
-		/* Need to be implemented by customer. This function returns 0 if OK */
+	int ret;
+	uint8_t buffer[size + 2];
 
-	return status;
+	// prefix data with reg address, MSB first
+	buffer[0] = (uint8_t)((RegisterAdress & 0xff00) >> 8);
+	buffer[1] = (uint8_t)(RegisterAdress & 0x00ff);
+	memcpy(&buffer[2], p_values, size);
+
+	ret = i2c_write_dt(&p_platform->config->i2c, buffer, size + 2);
+	
+	if (ret != 0) {
+		LOG_ERR("Failed to to write to i2c: %d", ret);
+		return 255;
+	}
+	return 0;
 }
 
 uint8_t VL53L8CX_RdMulti(
@@ -58,59 +65,73 @@ uint8_t VL53L8CX_RdMulti(
 		uint8_t *p_values,
 		uint32_t size)
 {
-	uint8_t status = 255;
-	
-	/* Need to be implemented by customer. This function returns 0 if OK */
+	int ret;
+
 	RegisterAdress = sys_cpu_to_be16(RegisterAdress);
-	i2c_write_read_dt(
-		p_platform->i2c, 
+	ret = i2c_write_read_dt(
+		&p_platform->config->i2c, 
 		(uint8_t *)(&RegisterAdress), 
 		2, // index length
 		p_values, 
 		size
 	);
-	
-	return status;
+
+	if (ret != 0) {
+		LOG_ERR("Failed to write_read from i2c: %d", ret);
+		return 255;
+	}
+	return 0;
 }
 
 uint8_t VL53L8CX_Reset_Sensor(
 		VL53L8CX_Platform *p_platform)
 {
-	uint8_t status = 0;
-	
 	/* (Optional) Need to be implemented by customer. This function returns 0 if OK */
-	
+	LOG_INF(" -- RESET sensor");
+
 	/* Set pin LPN to LOW */
+	gpio_pin_set_dt(&p_platform->config->lpn, 0);
 	/* Set pin AVDD to LOW */
 	/* Set pin VDDIO  to LOW */
 	/* Set pin CORE_1V8 to LOW */
-	VL53L8CX_WaitMs(p_platform, 100);
+	gpio_pin_set_dt(&p_platform->config->pwr, 0);
+	VL53L8CX_WaitMs(p_platform, 3000);
 
 	/* Set pin LPN to HIGH */
+	gpio_pin_set_dt(&p_platform->config->lpn, 1);
 	/* Set pin AVDD to HIGH */
 	/* Set pin VDDIO to HIGH */
 	/* Set pin CORE_1V8 to HIGH */
-	VL53L8CX_WaitMs(p_platform, 100);
+	gpio_pin_set_dt(&p_platform->config->pwr, 1);
+	VL53L8CX_WaitMs(p_platform, 3000);
 
-	return status;
+	return 0;
 }
 
 void VL53L8CX_SwapBuffer(
 		uint8_t 		*buffer,
 		uint16_t 	 	 size)
 {
-	uint32_t i, tmp;
+	uint32_t i;
+	uint32_t* uint32_buffer = (uint32_t*)buffer;
 	
 	/* Example of possible implementation using <string.h> */
-	for(i = 0; i < size; i = i + 4) 
-	{
-		tmp = (
-		  buffer[i]<<24)
-		|(buffer[i+1]<<16)
-		|(buffer[i+2]<<8)
-		|(buffer[i+3]);
-		
-		memcpy(&(buffer[i]), &tmp, 4);
+	//for(i = 0; i < size; i = i + 4) 
+	//{
+	//	tmp = (
+	//	  buffer[i]<<24)
+	//	|(buffer[i+1]<<16)
+	//	|(buffer[i+2]<<8)
+	//	|(buffer[i+3]);
+	//	
+	//	memcpy(&(buffer[i]), &tmp, 4);
+	//}
+
+	// Considering above example, and usage of the current function
+	// size is always a multiple of 4
+	// swap 4 by 4 so platform may benefit from HW acceleration
+	for(i = 0; i < size/4; i++) {
+		uint32_buffer[i] = BSWAP_32(uint32_buffer[i]);
 	}
 }	
 
@@ -118,9 +139,7 @@ uint8_t VL53L8CX_WaitMs(
 		VL53L8CX_Platform *p_platform,
 		uint32_t TimeMs)
 {
-	uint8_t status = 255;
-
 	/* Need to be implemented by customer. This function returns 0 if OK */
-	
-	return status;
+	k_msleep(TimeMs);	
+	return 0;
 }

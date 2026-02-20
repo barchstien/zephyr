@@ -10,8 +10,6 @@
   * https://www.st.com/resource/en/datasheet/vl53l8cx.pdf
   */
 
-#ifndef _PLATFORM_H_
-#define _PLATFORM_H_
 #pragma once
 
 //#include <zephyr/device.h>
@@ -33,9 +31,12 @@ typedef struct
 	/* To be filled with customer's platform. At least an I2C address/descriptor
 	 * needs to be added */
 	/* Example for most standard platform : I2C address of sensor */
-    uint16_t  			address;
-	//const struct device* dev;
-	struct i2c_dt_spec*	i2c;
+
+	/** i2c address, used in STM driver */
+	uint16_t address;
+
+	/** Zephyr config, required for i2c and gpio use */
+	const struct vl53l8cx_config* config;
 
 } VL53L8CX_Platform;
 
@@ -167,5 +168,3 @@ void VL53L8CX_SwapBuffer(
 uint8_t VL53L8CX_WaitMs(
 		VL53L8CX_Platform *p_platform,
 		uint32_t TimeMs);
-
-#endif	// _PLATFORM_H_
