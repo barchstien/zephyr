@@ -43,19 +43,44 @@ uint8_t VL53L8CX_WrMulti(
 		uint32_t size)
 {
 	int ret;
-	uint8_t buffer[size + 2];
+	const uint32_t CHUNK_MAX_SIZE = 64;
+	// reserver 2 bytes for register address
+	const uint32_t DATA_WRITE_MAX_SIZE = CHUNK_MAX_SIZE - 2;
+	uint8_t buffer[CHUNK_MAX_SIZE];
+	uint32_t i = 0;
 
-	// prefix data with reg address, MSB first
-	buffer[0] = (uint8_t)((RegisterAdress & 0xff00) >> 8);
-	buffer[1] = (uint8_t)(RegisterAdress & 0x00ff);
-	memcpy(&buffer[2], p_values, size);
+	while (i < size) {
+		const uint16_t reg_addr = RegisterAdress + i;
+		uint32_t chunk_size = CHUNK_MAX_SIZE;
+		if (size - i < DATA_WRITE_MAX_SIZE) {
+			chunk_size = size - i + 2;
+		}
 
-	ret = i2c_write_dt(&p_platform->config->i2c, buffer, size + 2);
-	
-	if (ret != 0) {
-		LOG_ERR("Failed to to write to i2c: %d", ret);
-		return 255;
+		//LOG_DBG("i2c write: %d (%d / %d)", chunk_size, i, size);
+
+		// prefix data with reg address, MSB first
+		buffer[0] = (uint8_t)((reg_addr & 0xff00) >> 8);
+		buffer[1] = (uint8_t)(reg_addr & 0x00ff);
+		memcpy(
+			&buffer[2], 
+			p_values + i, 
+			chunk_size - 2
+		);
+
+		
+		//ret = 0;
+		ret = i2c_write_dt(&p_platform->config->i2c, buffer, chunk_size);
+		
+		if (ret != 0) {
+			LOG_ERR("Failed to to write to i2c: %d", ret);
+			return 255;
+		}
+		//LOG_DBG("i2c write: %d", size + 2);
+		// 2 bytes are reserved for register address
+		i += DATA_WRITE_MAX_SIZE;
 	}
+
+	
 	return 0;
 }
 
@@ -80,6 +105,7 @@ uint8_t VL53L8CX_RdMulti(
 		LOG_ERR("Failed to write_read from i2c: %d", ret);
 		return 255;
 	}
+	//LOG_DBG("i2c write read: %d", size);
 	return 0;
 }
 
@@ -91,19 +117,26 @@ uint8_t VL53L8CX_Reset_Sensor(
 
 	/* Set pin LPN to LOW */
 	gpio_pin_set_dt(&p_platform->config->lpn, 0);
+	LOG_INF(" -- RESET sensor 0");
 	/* Set pin AVDD to LOW */
 	/* Set pin VDDIO  to LOW */
 	/* Set pin CORE_1V8 to LOW */
 	gpio_pin_set_dt(&p_platform->config->pwr, 0);
-	VL53L8CX_WaitMs(p_platform, 3000);
+	LOG_INF(" -- RESET sensor 1");
+	VL53L8CX_WaitMs(p_platform, 100);
+	LOG_INF(" -- RESET sensor 2");
 
 	/* Set pin LPN to HIGH */
 	gpio_pin_set_dt(&p_platform->config->lpn, 1);
+	LOG_INF(" -- RESET sensor 3");
 	/* Set pin AVDD to HIGH */
 	/* Set pin VDDIO to HIGH */
 	/* Set pin CORE_1V8 to HIGH */
 	gpio_pin_set_dt(&p_platform->config->pwr, 1);
-	VL53L8CX_WaitMs(p_platform, 3000);
+	LOG_INF(" -- RESET sensor 4");
+	VL53L8CX_WaitMs(p_platform, 100);
+
+	LOG_INF(" -- RESET sensor END");
 
 	return 0;
 }
@@ -140,6 +173,6 @@ uint8_t VL53L8CX_WaitMs(
 		uint32_t TimeMs)
 {
 	/* Need to be implemented by customer. This function returns 0 if OK */
-	k_msleep(TimeMs);	
+	k_msleep(TimeMs);
 	return 0;
 }

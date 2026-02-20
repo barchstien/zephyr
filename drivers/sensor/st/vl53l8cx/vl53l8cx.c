@@ -6,6 +6,10 @@
 
 #define DT_DRV_COMPAT st_vl53l8cx
 
+#include "vl53l8cx_api.h"
+#include "vl53l8cx_platform.h"
+#include "vl53l8cx_types.h"
+
 #include <errno.h>
 
 #include <zephyr/kernel.h>
@@ -18,38 +22,15 @@
 #include <zephyr/device.h>
 #include <zephyr/logging/log.h>
 
-#include "vl53l8cx_api.h"
-#include "vl53l8cx_platform.h"
-
 LOG_MODULE_REGISTER(VL53L8CX, CONFIG_SENSOR_LOG_LEVEL);
 
-struct vl53l8cx_config {
-	struct i2c_dt_spec i2c;
-	struct gpio_dt_spec lpn;
-	struct gpio_dt_spec pwr;
-};
-
-struct vl53l8cx_data {
-	VL53L8CX_Platform vl53l8cx;
-	//VL53L1_RangingMeasurementData_t data;
-	//VL53L1_DistanceModes distance_mode;
-
-    // TODO, coz zephyr doc says that preferred flow is via interrupts
-//#ifdef CONFIG_vl53l8cx_INTERRUPT_MODE
-//	struct gpio_callback gpio_cb;
-//	struct k_work work;
-//	const struct device *dev;
-//#endif
-};
-
-typedef int vl53l8cx_status_t;
 
 static vl53l8cx_status_t vl53l8cx_read_sensor(struct vl53l8cx_data *drv_data)
 {
 	int ret;
 
-    // TODO
-    //vl53l8cx_get_ranging_data(...)
+	// TODO
+	//vl53l8cx_get_ranging_data(...)
 
 	//ret = VL53L1_GetRangingMeasurementData(&drv_data->vl53l8cx, &drv_data->data);
 	//if (ret != VL53L1_ERROR_NONE) {
@@ -116,194 +97,6 @@ static int vl53l1x_init_interrupt(const struct device *dev)
 	return 0;
 }
 #endif
-
-static vl53l8cx_status_t vl53l8cx_initialize(const struct device *dev)
-{
-#if 0
-	struct vl53l8cx_data *drv_data = dev->data;
-	vl53l8cx_status_t ret;
-	VL53L1_DeviceInfo_t vl53l8cx_dev_info;
-
-	LOG_DBG("[%s] Initializing ", dev->name);
-
-	/* Pull XSHUT high to start the sensor */
-#ifdef CONFIG_vl53l8cx_XSHUT
-	const struct vl53l8cx_config *const config = dev->config;
-
-	if (config->xshut.port) {
-		int gpio_ret = gpio_pin_set_dt(&config->xshut, 1);
-
-		if (gpio_ret < 0) {
-			LOG_ERR("[%s] Unable to set XSHUT gpio (error %d)", dev->name, gpio_ret);
-			return -EIO;
-		}
-		/* Boot duration is 1.2 ms max */
-		k_sleep(K_MSEC(2));
-	}
-#endif
-
-	/* ONE TIME device initialization.
-	 * To be called ONLY ONCE after device is brought out of reset
-	 */
-	ret = VL53L1_DataInit(&drv_data->vl53l8cx);
-	if (ret != VL53L1_ERROR_NONE) {
-		LOG_ERR("[%s] vl53l8cx_DataInit return error (%d)", dev->name, ret);
-		return -ENOTSUP;
-	}
-
-	/* Do basic device init */
-	ret = VL53L1_StaticInit(&drv_data->vl53l8cx);
-	if (ret != VL53L1_ERROR_NONE) {
-		LOG_ERR("[%s] VL53L1_StaticInit return error (%d)", dev->name, ret);
-		return -ENOTSUP;
-	}
-
-	/* Get info from sensor */
-	(void)memset(&vl53l8cx_dev_info, 0, sizeof(VL53L1_DeviceInfo_t));
-
-	ret = VL53L1_GetDeviceInfo(&drv_data->vl53l8cx, &vl53l8cx_dev_info);
-	if (ret != VL53L1_ERROR_NONE) {
-		LOG_ERR("[%s] VL53L1_GetDeviceInfo return error (%d)", dev->name, ret);
-		return -ENODEV;
-	}
-
-	LOG_DBG("[%s] vl53l8cx_GetDeviceInfo returned %d", dev->name, ret);
-	LOG_DBG("   Device Name : %s", vl53l8cx_dev_info.Name);
-	LOG_DBG("   Device Type : %s", vl53l8cx_dev_info.Type);
-	LOG_DBG("   Device ID : %s", vl53l8cx_dev_info.ProductId);
-	LOG_DBG("   ProductRevisionMajor : %d", vl53l8cx_dev_info.ProductRevisionMajor);
-	LOG_DBG("   ProductRevisionMinor : %d", vl53l8cx_dev_info.ProductRevisionMinor);
-
-	/* Set default distance mode */
-	drv_data->distance_mode = VL53L1_DISTANCEMODE_LONG;
-	ret = VL53L1_SetDistanceMode(&drv_data->vl53l8cx, drv_data->distance_mode);
-	if (ret != VL53L1_ERROR_NONE) {
-		LOG_ERR("[%s] VL53L1_SetDistanceMode return error (%d)", dev->name, ret);
-		return -EINVAL;
-	}
-#endif
-	return 0;
-}
-
-/* Mapping is 1:1 with the API.
- * From VL531X datasheet:
- *          | Max distance  | Max distance in
- *  Mode    | in dark (cm)  | strong ambient light (cm)
- * ----------------------------------------------------
- * short    | 136           | 135
- * medium   | 290           | 76
- * long     | 360           | 73
- */
-static int vl53l8cx_set_mode(const struct device *dev,
-		const struct sensor_value *val)
-{
-#if 0
-	struct vl53l8cx_data *drv_data = dev->data;
-	VL53L1_Error ret;
-
-	switch (val->val1) {
-	/* short */
-	case 1:
-	/* medium */
-	case 2:
-	/* long */
-	case 3:
-		drv_data->distance_mode = val->val1;
-		break;
-	default:
-		drv_data->distance_mode = VL53L1_DISTANCEMODE_LONG;
-		break;
-	}
-
-	ret = VL53L1_SetDistanceMode(&drv_data->vl53l8cx, drv_data->distance_mode);
-	if (ret != VL53L1_ERROR_NONE) {
-		LOG_ERR("[%s] VL53L1_SetDistanceMode return error (%d)", dev->name, ret);
-		return -EINVAL;
-	}
-#endif
-	return 0;
-}
-
-/*
- * The ROI is a 16x16 grid.
- * The bottom left is (0,0), top right is (15, 15), for
- * a total of 256 squares (numbered 0 through 255).
- * The default ROI is val1 = 240, val2 = 15 (the full grid).
- * See UM2356 User Manual (VL531X API doc).
- */
-static int vl53l8cx_set_roi(const struct device *dev,
-		const struct sensor_value *val)
-{
-#if 0
-	struct vl53l8cx_data *drv_data = dev->data;
-	VL53L1_Error ret;
-
-	if ((val->val1 < 0) ||
-	    (val->val2 < 0) ||
-	    (val->val1 > 255) ||
-	    (val->val2 > 255) ||
-	    (val->val2 >= val->val1)) {
-		return -EINVAL;
-	}
-
-	/* Map val to pUserROi */
-	VL53L1_UserRoi_t pUserROi = {
-		.TopLeftX = val->val1 % 16,
-		.TopLeftY = (uint8_t)(val->val1 / 16),
-		.BotRightX = val->val2 % 16,
-		.BotRightY = (uint8_t)(val->val2 / 16),
-	};
-
-	ret = VL53L1_SetUserROI(&drv_data->vl53l8cx, &pUserROi);
-	if (ret != VL53L1_ERROR_NONE) {
-		LOG_ERR("[%s] VL53L1_SetUserROI return error (%d)", dev->name, ret);
-		return -EINVAL;
-	}
-#endif
-	return 0;
-}
-
-static int vl53l8cx_get_mode(const struct device *dev,
-		struct sensor_value *val)
-{
-#if 0
-	struct vl53l8cx_data *drv_data = dev->data;
-	VL53L1_DistanceModes mode;
-	VL53L1_Error ret;
-
-	ret = VL53L1_GetDistanceMode(&drv_data->vl53l8cx, &mode);
-	if (ret != VL53L1_ERROR_NONE) {
-		LOG_ERR("[%s] VL53L1_GetDistanceMode return error (%d)", dev->name, ret);
-		return -ENODATA;
-	}
-
-	/* Mapping is 1:1 with the API */
-	val->val1 = (int32_t)mode;
-	val->val2 = 0;
-#endif
-	return 0;
-}
-
-static int vl53l8cx_get_roi(const struct device *dev,
-		struct sensor_value *val)
-{
-#if 0
-	struct vl53l8cx_data *drv_data = dev->data;
-	VL53L1_Error ret;
-	VL53L1_UserRoi_t pUserROi;
-
-	ret = VL53L1_GetUserROI(&drv_data->vl53l8cx, &pUserROi);
-	if (ret != VL53L1_ERROR_NONE) {
-		LOG_ERR("[%s] VL53L1_GetUserROI return error (%d)", dev->name, ret);
-		return -ENODATA;
-	}
-
-	/* Map pUserROi to val */
-	val->val1 = (int32_t)((16 * pUserROi.TopLeftY) + pUserROi.TopLeftX);
-	val->val2 = (int32_t)((16 * pUserROi.BotRightY) + pUserROi.BotRightX);
-#endif
-	return 0;
-}
 
 static int vl53l8cx_sample_fetch(const struct device *dev,
 		enum sensor_channel chan)
@@ -429,73 +222,79 @@ static DEVICE_API(sensor, vl53l8cx_api_funcs) = {
 
 static int vl53l8cx_driver_init(const struct device *dev)
 {
-#if 0
-	int ret = 0;
-	struct vl53l8cx_data *drv_data = dev->data;
 	const struct vl53l8cx_config *config = dev->config;
-
-	/* Initialize the HAL i2c peripheral */
-	drv_data->vl53l8cx.i2c = &config->i2c;
-
+	struct vl53l8cx_data *data = dev->data;
+	// STM vl53l8cx_platform.c requires GPIOs and I2C use
+	//data->vl53l8cx_config.config = config;
+	//data->vl53l8cx_config.platform.address = config->i2c.addr;
+	data->vl53l8cx_config.platform.config = config;
+	data->vl53l8cx_config.platform.address = config->i2c.addr;
+	int ret = 0;
+	
+	// GPIO lpn
+	if (!gpio_is_ready_dt(&config->lpn)) {
+		LOG_ERR("GPIO port %s not ready", config->lpn.port->name);
+		return -ENODEV;
+	}
+	ret = gpio_pin_configure_dt(&config->lpn, GPIO_OUTPUT_INACTIVE);
+	if (ret < 0) {
+		LOG_ERR("GPIO port %s failed to set low", config->lpn.port->name);
+		return -ENODEV;
+	}
+	//k_msleep(10);
+	// GPIO pwr
+	if (!gpio_is_ready_dt(&config->pwr)) {
+		LOG_ERR("GPIO port %s not ready", config->pwr.port->name);
+		return -ENODEV;
+	}
+	ret = gpio_pin_configure_dt(&config->pwr, GPIO_OUTPUT_INACTIVE);
+	if (ret < 0) {
+		LOG_ERR("GPIO port %s failed to set low", config->pwr.port->name);
+		return -ENODEV;
+	}
+	//k_msleep(10);
+	// I2C
 	if (!device_is_ready(config->i2c.bus)) {
 		LOG_ERR("I2C bus is not ready");
 		return -ENODEV;
 	}
 
-	/* Configure gpio connected to vl53l8cx's XSHUT pin to
-	 * allow deepest sleep mode
-	 */
-#ifdef CONFIG_vl53l8cx_XSHUT
-		if (config->xshut.port) {
-			ret = gpio_pin_configure_dt(&config->xshut, GPIO_OUTPUT);
-			if (ret < 0) {
-				LOG_ERR("[%s] Unable to configure GPIO as output", dev->name);
-				return -EIO;
-			}
-		}
-#endif
+	ret = VL53L8CX_Reset_Sensor(&data->vl53l8cx_config.platform);
+	if (ret != 0) {
+		LOG_ERR("[%s] Failed to reset", dev->name);
+		return ret;
+	}
+	LOG_INF("[%s] is reset", dev->name);
 
-#ifdef CONFIG_vl53l8cx_INTERRUPT_MODE
-		if (config->gpio1.port) {
-			ret = vl53l8cx_init_interrupt(dev);
-			if (ret < 0) {
-				LOG_ERR("Failed to initialize interrupt!");
-				return -EIO;
-			}
-		}
-#endif
-
-	ret = vl53l8cx_initialize(dev);
-	if (ret) {
+	// ST driver upload FW to HW
+	ret = vl53l8cx_init(&data->vl53l8cx_config);
+	if (ret != 0) {
+		LOG_ERR("[%s] Failed to init", dev->name);
 		return ret;
 	}
 
-	LOG_DBG("[%s] Initialized", dev->name);
-#endif
+	LOG_INF("[%s] Initialized", dev->name);
 	return 0;
 }
-
-
 
 
 #define VL53L8CX_INIT(i) \
 	static const struct vl53l8cx_config vl53l8cx_config_##i = { \
 		.i2c = I2C_DT_SPEC_INST_GET(i), \
-		IF_ENABLED(CONFIG_vl53l8cx_XSHUT, ( \
-		.lpn = GPIO_DT_SPEC_INST_GET_OR(i, lpn_gpios, { 0 }),)) \
-		IF_ENABLED(CONFIG_vl53l8cx_INTERRUPT_MODE, ( \
-		.pwr = GPIO_DT_SPEC_INST_GET_OR(i, pwr_gpios, { 0 }),)) \
+		.lpn = GPIO_DT_SPEC_INST_GET_OR(i, lpn_gpios, { 0 }), \
+		.pwr = GPIO_DT_SPEC_INST_GET_OR(i, pwr_gpios, { 0 }), \
 	}; \
 	\
 	static struct vl53l8cx_data vl53l8cx_data_##i; \
 	\
-	SENSOR_DEVICE_DT_INST_DEFINE(i, \
-				     vl53l8cx_driver_init, \
-				     NULL, \
-				     &vl53l8cx_data_##i, \
-				     &vl53l8cx_config_##i, \
-				     POST_KERNEL, \
-				     CONFIG_SENSOR_INIT_PRIORITY, \
-				     &vl53l8cx_api_funcs);
+	SENSOR_DEVICE_DT_INST_DEFINE(\
+		i, \
+		vl53l8cx_driver_init, \
+		NULL, \
+		&vl53l8cx_data_##i, \
+		&vl53l8cx_config_##i, \
+		POST_KERNEL, \
+		CONFIG_SENSOR_INIT_PRIORITY, \
+		&vl53l8cx_api_funcs);
 
 DT_INST_FOREACH_STATUS_OKAY(VL53L8CX_INIT)
