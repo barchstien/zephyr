@@ -25,200 +25,138 @@
 LOG_MODULE_REGISTER(VL53L8CX, CONFIG_SENSOR_LOG_LEVEL);
 
 
-static vl53l8cx_status_t vl53l8cx_read_sensor(struct vl53l8cx_data *drv_data)
+//////////////////////////////////////////////////////////////////////////
+
+static int vl53l8cx_attr_set(
+	const struct device *dev,
+    enum sensor_channel chan,
+    enum sensor_attribute attr,
+    const struct sensor_value *val)
 {
-	int ret;
+    struct vl53l8cx_data *data = dev->data;
 
-	// TODO
-	//vl53l8cx_get_ranging_data(...)
+    if (chan != SENSOR_CHAN_ALL && chan != SENSOR_CHAN_DISTANCE) {
+        return -ENOTSUP;
+    }
 
-	//ret = VL53L1_GetRangingMeasurementData(&drv_data->vl53l8cx, &drv_data->data);
-	//if (ret != VL53L1_ERROR_NONE) {
-	//	LOG_ERR("VL53L1_GetRangingMeasurementData return error (%d)", ret);
-	//	return ret;
-	//}
-//
-	//ret = VL53L1_ClearInterruptAndStartMeasurement(&drv_data->vl53l8cx);
-	//if (ret != VL53L1_ERROR_NONE) {
-	//	LOG_ERR("VL53L1_ClearInterruptAndStartMeasurement return error (%d)", ret);
-	//	return ret;
-	//}
+    switch (attr) {
+        case SENSOR_ATTR_SAMPLING_FREQUENCY:
+            if (val->val1 < 0 || val->val1 > 30) {
+                LOG_ERR("Expect sample freq in [0; 30] but got: %d Hz", val->val1);
+                return -EINVAL;
+            }
 
-	return VL53L8CX_STATUS_OK;
+			if (val->val1 == 0) {
+				// Disable continuous mode
+				vl53l8cx_set_ranging_mode(
+					&data->vl53l8cx_private_config,
+					VL53L8CX_RANGING_MODE_AUTONOMOUS
+				);
+			}
+			else {
+				// set freq and enable continuous mode
+				vl53l8cx_set_ranging_frequency_hz(
+					&data->vl53l8cx_private_config,
+					val->val1
+				);
+				vl53l8cx_set_ranging_mode(
+					&data->vl53l8cx_private_config,
+					VL53L8CX_RANGING_MODE_CONTINUOUS
+				);
+			}
+
+            LOG_INF("Sample freq set to %d Hz", val->val1);
+            return 0;
+
+        case SENSOR_ATTR_RESOLUTION:
+			if (val->val1 == 16) {
+				vl53l8cx_set_resolution (
+					&data->vl53l8cx_private_config,
+					VL53L8CX_RESOLUTION_4X4
+				);
+			}
+			else if (val->val1 == 64) {
+				vl53l8cx_set_resolution (
+					&data->vl53l8cx_private_config,
+					VL53L8CX_RESOLUTION_8X8
+				);
+			}
+			else {
+                return -EINVAL;
+            }
+            LOG_INF("Resolution set to %d zones", val->val1);
+            return 0;
+
+        default:
+            return -ENOTSUP;
+    }
 }
 
-#ifdef CONFIG_VL53L1X_INTERRUPT_MODE
-static void vl53l1x_worker(struct k_work *work)
+static int vl53l8cx_attr_get(
+	const struct device *dev,
+    enum sensor_channel chan,
+    enum sensor_attribute attr,
+    struct sensor_value *val)
 {
-	struct vl53l1x_data *drv_data = CONTAINER_OF(work, struct vl53l1x_data, work);
+    struct vl53l8cx_data *data = dev->data;
+	uint8_t tmp_u8;
 
-	vl53l1x_read_sensor(drv_data);
+    if (chan != SENSOR_CHAN_ALL && chan != SENSOR_CHAN_DISTANCE) {
+        return -ENOTSUP;
+    }
+
+    switch (attr) {
+        case SENSOR_ATTR_SAMPLING_FREQUENCY:
+            vl53l8cx_get_ranging_frequency_hz(
+				&data->vl53l8cx_private_config,
+				&tmp_u8
+			);
+            val->val1 = tmp_u8;
+            val->val2 = 0;
+            return 0;
+
+		case SENSOR_ATTR_RESOLUTION:
+			vl53l8cx_set_resolution (
+				&data->vl53l8cx_private_config,
+				&tmp_u8
+			);
+            val->val1 = tmp_u8;
+            val->val2 = 0;
+            return 0;
+
+        default:
+            return -ENOTSUP;
+    }
 }
 
-static void vl53l1x_gpio_callback(const struct device *dev,
-		struct gpio_callback *cb, uint32_t pins)
-{
-	struct vl53l1x_data *drv_data = CONTAINER_OF(cb, struct vl53l1x_data, gpio_cb);
-
-	k_work_submit(&drv_data->work);
-}
-
-static int vl53l1x_init_interrupt(const struct device *dev)
-{
-	struct vl53l1x_data *drv_data = dev->data;
-	const struct vl53l1x_config *config = dev->config;
-	int ret;
-
-	drv_data->dev = dev;
-
-	if (!gpio_is_ready_dt(&config->gpio1)) {
-		LOG_ERR("%s: device %s is not ready", dev->name, config->gpio1.port->name);
-		return -ENODEV;
-	}
-
-	ret = gpio_pin_configure_dt(&config->gpio1, GPIO_INPUT | GPIO_PULL_UP);
-	if (ret < 0) {
-		LOG_ERR("[%s] Unable to configure GPIO interrupt", dev->name);
-		return -EIO;
-	}
-
-	gpio_init_callback(&drv_data->gpio_cb,
-					vl53l1x_gpio_callback,
-					BIT(config->gpio1.pin));
-
-	ret = gpio_add_callback(config->gpio1.port, &drv_data->gpio_cb);
-	if (ret < 0) {
-		LOG_ERR("Failed to set gpio callback!");
-		return -EIO;
-	}
-
-	drv_data->work.handler = vl53l1x_worker;
-
-	return 0;
-}
-#endif
-
-static int vl53l8cx_sample_fetch(const struct device *dev,
-		enum sensor_channel chan)
-{
-#if 0
-	struct vl53l8cx_data *drv_data = dev->data;
-	VL53L1_Error ret;
-
-	__ASSERT_NO_MSG((chan == SENSOR_CHAN_ALL)
-			|| (chan == SENSOR_CHAN_DISTANCE));
-
-	/* Will immediately stop current measurement */
-	ret = VL53L1_StopMeasurement(&drv_data->vl53l8cx);
-	if (ret != VL53L1_ERROR_NONE) {
-		LOG_ERR("VL53L1_StopMeasurement return error (%d)", ret);
-		return -EBUSY;
-	}
-
-#ifdef CONFIG_vl53l8cx_INTERRUPT_MODE
-	const struct vl53l8cx_config *config = dev->config;
-
-	ret = gpio_pin_interrupt_configure_dt(&config->gpio1, GPIO_INT_EDGE_TO_INACTIVE);
-	if (ret < 0) {
-		LOG_ERR("[%s] Unable to config interrupt", dev->name);
-		return -EIO;
-	}
-#endif
-
-	ret = VL53L1_StartMeasurement(&drv_data->vl53l8cx);
-	if (ret != VL53L1_ERROR_NONE) {
-		LOG_ERR("[%s] VL53L1_StartMeasurement return error (%d)", dev->name, ret);
-		return -EBUSY;
-	}
-#endif
-	return 0;
-}
-
-static int vl53l8cx_channel_get(const struct device *dev,
-		enum sensor_channel chan,
-		struct sensor_value *val)
-{
-#if 0
-	struct vl53l8cx_data *drv_data = dev->data;
-	VL53L1_Error ret;
-
-	if (chan != SENSOR_CHAN_DISTANCE) {
-		return -ENOTSUP;
-	}
-
-	/* Calling VL53L1_WaitMeasurementDataReady regardless of using interrupt or
-	 * polling method ensures user does not have to consider the time between
-	 * calling fetch and get.
-	 */
-	ret = VL53L1_WaitMeasurementDataReady(&drv_data->vl53l8cx);
-	if (ret != VL53L1_ERROR_NONE) {
-		LOG_ERR("[%s] VL53L1_WaitMeasurementDataReady return error (%d)", dev->name, ret);
-		return -EBUSY;
-	}
-
-	if (IS_ENABLED(CONFIG_vl53l8cx_INTERRUPT_MODE) == 0) {
-		/* Using driver poling mode */
-		ret = vl53l8cx_read_sensor(drv_data);
-		if (ret != VL53L1_ERROR_NONE) {
-			return -ENODATA;
-		}
-	}
-
-	val->val1 = (int32_t)(drv_data->data.RangeMilliMeter);
-	/* RangeFractionalPart not implemented in API */
-	val->val2 = 0;
-#endif
-	return 0;
-}
-
-static int vl53l8cx_attr_get(const struct device *dev,
-		enum sensor_channel chan,
-		enum sensor_attribute attr,
-		struct sensor_value *val)
-{
-	__ASSERT_NO_MSG(chan == SENSOR_CHAN_DISTANCE);
-
-	int ret;
-#if 0
-
-	if (attr == SENSOR_ATTR_CONFIGURATION) {
-		ret = vl53l8cx_get_mode(dev, val);
-	} else if (attr == SENSOR_ATTR_CALIB_TARGET) {
-		ret = vl53l8cx_get_roi(dev, val);
-	} else {
-		return -ENOTSUP;
-	}
-#endif
-	return ret;
-}
-
-static int vl53l8cx_attr_set(const struct device *dev,
-		enum sensor_channel chan,
-		enum sensor_attribute attr,
-		const struct sensor_value *val)
-{
-	__ASSERT_NO_MSG(chan == SENSOR_CHAN_DISTANCE);
-
-	int ret;
-#if 0
-
-	if (attr == SENSOR_ATTR_CONFIGURATION) {
-		ret = vl53l8cx_set_mode(dev, val);
-	} else if (attr == SENSOR_ATTR_CALIB_TARGET) {
-		ret = vl53l8cx_set_roi(dev, val);
-	} else {
-		return -ENOTSUP;
-	}
-#endif
-	return ret;
-}
-
-static DEVICE_API(sensor, vl53l8cx_api_funcs) = {
-	.sample_fetch = vl53l8cx_sample_fetch,
-	.channel_get = vl53l8cx_channel_get,
-	.attr_get = vl53l8cx_attr_get,
-	.attr_set = vl53l8cx_attr_set,
+static const struct sensor_driver_api vl53l8cx_api_funcs = {
+    .attr_set = vl53l8cx_attr_set,
+    .attr_get = vl53l8cx_attr_get
 };
+
+// TODO also add sensor_decoder_api
+//static const struct sensor_decoder_api my_decoder = {
+//    .decode = my_decode,
+//    .get_frame_count = ... // optional
+//    .get_size_info = ...   // optional
+//};
+
+/////////////////////////////
+
+//static int vl53l8cx_sensor_read()
+//{
+//	int ret;
+//
+//	// TODO
+//	LOG_INF("BLoooooP");
+//
+//	return 0;
+//}
+
+//static DEVICE_API(sensor, vl53l8cx_api_funcs) = {
+//	.sensor_read = vl53l8cx_sensor_read,
+//	//.sensor_decode = vl53l8cx_sensor_decode
+//};
 
 static int vl53l8cx_driver_init(const struct device *dev)
 {
@@ -227,8 +165,8 @@ static int vl53l8cx_driver_init(const struct device *dev)
 	// STM vl53l8cx_platform.c requires GPIOs and I2C use
 	//data->vl53l8cx_config.config = config;
 	//data->vl53l8cx_config.platform.address = config->i2c.addr;
-	data->vl53l8cx_config.platform.config = config;
-	data->vl53l8cx_config.platform.address = config->i2c.addr;
+	data->vl53l8cx_private_config.platform.config = config;
+	data->vl53l8cx_private_config.platform.address = config->i2c.addr;
 	int ret = 0;
 	
 	// GPIO lpn
@@ -259,7 +197,7 @@ static int vl53l8cx_driver_init(const struct device *dev)
 		return -ENODEV;
 	}
 
-	ret = VL53L8CX_Reset_Sensor(&data->vl53l8cx_config.platform);
+	ret = VL53L8CX_Reset_Sensor(&data->vl53l8cx_private_config.platform);
 	if (ret != 0) {
 		LOG_ERR("[%s] Failed to reset", dev->name);
 		return ret;
@@ -267,7 +205,7 @@ static int vl53l8cx_driver_init(const struct device *dev)
 	LOG_INF("[%s] is reset", dev->name);
 
 	// ST driver upload FW to HW
-	ret = vl53l8cx_init(&data->vl53l8cx_config);
+	ret = vl53l8cx_init(&data->vl53l8cx_private_config);
 	if (ret != 0) {
 		LOG_ERR("[%s] Failed to init", dev->name);
 		return ret;
@@ -276,7 +214,6 @@ static int vl53l8cx_driver_init(const struct device *dev)
 	LOG_INF("[%s] Initialized", dev->name);
 	return 0;
 }
-
 
 #define VL53L8CX_INIT(i) \
 	static const struct vl53l8cx_config vl53l8cx_config_##i = { \

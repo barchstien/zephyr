@@ -28,17 +28,15 @@ struct vl53l8cx_config {
  */
 struct vl53l8cx_data {
     /**
-     * STM defined driver structure to "be filled with customer's platform"
-     * Used for platform dependent i2c and gpio calls
-     * @see vl53l8cx_platform.h
-     */
-	//VL53L8CX_Platform vl53l8cx_platform; <---- already part of VL53L8CX_Configuration
-    
-    /**
      * STM defined driver structure that "contains the sensor configuration"
+     * @warning "User MUST not manually change these field, except for the sensor address"
      * @see vl53l8cx_api.h
      */
-    VL53L8CX_Configuration vl53l8cx_config;
+    VL53L8CX_Configuration vl53l8cx_private_config;
+
+    // Max 30Hz 4x4, max 15Hz 8x8
+    // already in attributes
+    //uint8_t sample_freq;
 	
     // TODO, coz zephyr doc says that preferred flow is via interrupts
 //#ifdef CONFIG_vl53l8cx_INTERRUPT_MODE
@@ -47,5 +45,3 @@ struct vl53l8cx_data {
 //	const struct device *dev;
 //#endif
 };
-
-typedef int vl53l8cx_status_t;
