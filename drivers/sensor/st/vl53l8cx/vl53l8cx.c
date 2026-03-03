@@ -13,14 +13,15 @@
 #include <errno.h>
 
 #include <zephyr/device.h>
-#include <zephyr/drivers/i2c.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/types.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/logging/log.h>
-//#include <zephyr/sys/__assert.h>
+#include <zephyr/rtio/rtio.h>
+#include <zephyr/rtio/work.h>
 
 LOG_MODULE_REGISTER(VL53L8CX, CONFIG_SENSOR_LOG_LEVEL);
 
@@ -127,10 +128,40 @@ static int vl53l8cx_attr_get(const struct device *dev,
 void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 {
 	LOG_INF("vl53l8cx_submit_sync");
+
+	//const struct sensor_read_config *cfg_read = iodev_sqe->sqe.iodev->data;
+	//const struct device *dev = cfg_read->sensor;
+	//const struct fake_sensor_config *cfg = dev->config;
+
+	uint32_t min_buf_len = 16; // TODO
+	uint8_t *buf;
+	uint32_t buf_len;
+
+	int ret = rtio_sqe_rx_buf(
+		iodev_sqe, 
+		min_buf_len, 
+		min_buf_len, 
+		&buf, 
+		&buf_len
+	);
+	if (ret != 0) {
+		LOG_ERR("Failed to allocate buffer from mempool");
+		rtio_iodev_sqe_err(iodev_sqe, -ENOMEM);
+		return;
+	}
+
+	// TODO i2c read
+	k_msleep(200);
+	for (int i = 0; i < buf_len; i++) {
+		buf[i] = (uint8_t)i;
+	}
+
+	rtio_iodev_sqe_ok(iodev_sqe, 0);
 }
 
 static void vl53l8cx_submit(const struct device *sensor, struct rtio_iodev_sqe *iodev_sqe)
 {
+#if 0
 	//const struct rtio_sqe *sqe = &(iodev_sqe->sqe);
 	uint32_t min_buf_len = 16; // TODO
 	uint8_t *buf;
@@ -155,15 +186,24 @@ static void vl53l8cx_submit(const struct device *sensor, struct rtio_iodev_sqe *
 	for (int i = 0; i < buf_len; i++) {
 		buf[i] = (uint8_t)i;
 	}
+	LOG_INF("vl53l8cx_submit 2");
 	rtio_iodev_sqe_ok(iodev_sqe, 0);
-}
+	LOG_INF("vl53l8cx_submit 3");
+#endif
 
-// TODO also add sensor_decoder_api
-//static const struct sensor_decoder_api my_decoder = {
-//    .decode = my_decode,
-//    .get_frame_count = ... // optional
-//    .get_size_info = ...   // optional
-//};
+
+	/* Offload execution using the Zephyr standard RTIO workqueue request */
+	struct rtio_work_req *req = rtio_work_req_alloc();
+
+	if (req == NULL) {
+		rtio_iodev_sqe_err(iodev_sqe, -ENOMEM);
+		return;
+	}
+
+	/* Dispatch into the RTIO workqueue - the caller thread continues immediately */
+	rtio_work_req_submit(req, iodev_sqe, vl53l8cx_submit_sync);
+	//return 0;
+}
 
 /////////////////////////////
 
@@ -236,7 +276,6 @@ static int vl53l8cx_decoder_decode(const uint8_t *buffer,
 //
 	///* return number of samples written */
 	//return (*fit_idx);
-	LOG_INF("vl53l8cx_submit_sync");
 	memcpy(data_out, buffer, 16);
 	*fit_count += sizeof(VL53L8CX_ResultsData);
 	return 1;
