@@ -20,6 +20,7 @@ struct vl53l8cx_config {
 	struct i2c_dt_spec i2c;
 	struct gpio_dt_spec lpn;
 	struct gpio_dt_spec pwr;
+    struct gpio_dt_spec rdy;
 };
 
 /**
@@ -33,6 +34,13 @@ struct vl53l8cx_data {
      * @see vl53l8cx_api.h
      */
     VL53L8CX_Configuration vl53l8cx_private_config;
+
+    /**
+     * Call back for INT, aka ready to read
+     */
+    struct gpio_callback rdy_cb;
+
+    struct rtio_iodev_sqe *sqe;
 
     // Max 30Hz 4x4, max 15Hz 8x8
     // already in attributes

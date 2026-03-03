@@ -15,7 +15,7 @@ static inline int test_read(const struct device *dev, uint8_t *buff, uint32_t si
     LOG_INF(" -- Start ranging");
     vl53l8cx_start_ranging(&data->vl53l8cx_private_config);
 
-    for (i=0; i<50000; i++) 
+    while (true) 
     {
         uint8_t is_ready;
         vl53l8cx_check_data_ready(&data->vl53l8cx_private_config, &is_ready);
@@ -24,6 +24,11 @@ static inline int test_read(const struct device *dev, uint8_t *buff, uint32_t si
             ret = vl53l8cx_get_ranging_data(&data->vl53l8cx_private_config, &result_data);
             LOG_INF("%d Got data: %d %d %d %d", 
                 ret, result_data.distance_mm[0], result_data.distance_mm[1], result_data.distance_mm[2], result_data.distance_mm[3]);
+            if (i>10) {
+                break;
+            }
+            i++;
+            //k_msleep(1000);
         }
         else {
             //LOG_INF("  not ready");
@@ -35,5 +40,6 @@ static inline int test_read(const struct device *dev, uint8_t *buff, uint32_t si
 
     LOG_INF(" -- Stop ranging");
     vl53l8cx_stop_ranging(&data->vl53l8cx_private_config);
+    k_msleep(1000);
     return 0;
 }

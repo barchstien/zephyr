@@ -19,7 +19,7 @@ properties:
       Control AVDD, IOVDD and CORE_1V8, which is required to 
       perform sensor reset in STM provided driver code.
     required: true
-  int-gpios:
+  rdy-gpios:
     type: phandle-array
     description: |
       An interrupt is raised when a distance measurement is ready.
