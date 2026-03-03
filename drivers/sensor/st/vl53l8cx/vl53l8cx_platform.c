@@ -112,7 +112,7 @@ uint8_t VL53L8CX_Reset_Sensor(
 	/* Set pin VDDIO  to LOW */
 	/* Set pin CORE_1V8 to LOW */
 	gpio_pin_set_dt(&p_platform->config->pwr, 0);
-	VL53L8CX_WaitMs(p_platform, 100);
+	VL53L8CX_WaitMs(p_platform, 10);
 
 	/* Set pin LPN to HIGH */
 	gpio_pin_set_dt(&p_platform->config->lpn, 1);
@@ -120,7 +120,7 @@ uint8_t VL53L8CX_Reset_Sensor(
 	/* Set pin VDDIO to HIGH */
 	/* Set pin CORE_1V8 to HIGH */
 	gpio_pin_set_dt(&p_platform->config->pwr, 1);
-	VL53L8CX_WaitMs(p_platform, 100);
+	VL53L8CX_WaitMs(p_platform, 10);
 
 	return 0;
 }

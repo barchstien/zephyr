@@ -109,6 +109,14 @@ static int vl53l8cx_attr_get(const struct device *dev,
 		);
 		val->val1 = tmp_u8;
 		val->val2 = 0;
+		if (val->val1 > 0) {
+			LOG_INF(" -- Start ranging");
+    		vl53l8cx_start_ranging(&data->vl53l8cx_private_config);
+		}
+		else {
+			LOG_INF(" -- Stop ranging");
+    		vl53l8cx_stop_ranging(&data->vl53l8cx_private_config);
+		}
 		return 0;
 
 	case SENSOR_ATTR_RESOLUTION:
@@ -124,6 +132,9 @@ static int vl53l8cx_attr_get(const struct device *dev,
 		return -ENOTSUP;
 	}
 }
+
+// debug
+static VL53L8CX_ResultsData result_data;
 
 void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 {
@@ -149,12 +160,35 @@ void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 		rtio_iodev_sqe_err(iodev_sqe, -ENOMEM);
 		return;
 	}
-
+#if 0
 	// TODO i2c read
 	k_msleep(200);
 	for (int i = 0; i < buf_len; i++) {
 		buf[i] = (uint8_t)i;
 	}
+#else
+	const struct sensor_read_config *read_cfg = iodev_sqe->sqe.iodev->data;
+	const struct device *dev = read_cfg->sensor;
+	struct vl53l8cx_data *data = dev->data;
+	k_msleep(50);
+	while (true) {
+		uint8_t is_ready;
+		vl53l8cx_check_data_ready(&data->vl53l8cx_private_config, &is_ready);
+		if (is_ready) {
+			ret = vl53l8cx_get_ranging_data(&data->vl53l8cx_private_config, &result_data);
+			// TODO also check status, etc
+			// TODO get resolution
+			memcpy(buf, (uint8_t*)result_data.distance_mm, 16 * sizeof(int16_t));
+			LOG_INF("%d Read data: %d %d %d %d", 
+				ret, result_data.distance_mm[0], result_data.distance_mm[1], result_data.distance_mm[2], result_data.distance_mm[3]);
+			break;
+		}
+		else {
+			//LOG_INF("  not ready");
+		}
+		k_msleep(10);
+	}
+#endif
 
 	rtio_iodev_sqe_ok(iodev_sqe, 0);
 }
@@ -382,6 +416,7 @@ static int vl53l8cx_driver_init(const struct device *dev)
 	LOG_INF("[%s] is reset", dev->name);
 
 	// ST driver upload FW to HW
+	// Taking 2 sec @ 400KHz
 	ret = vl53l8cx_init(&data->vl53l8cx_private_config);
 	if (ret != 0) {
 		LOG_ERR("[%s] Failed to init", dev->name);
