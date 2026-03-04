@@ -22,6 +22,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/rtio/rtio.h>
 #include <zephyr/rtio/work.h>
+#include <zephyr/sys/atomic.h>
 
 LOG_MODULE_REGISTER(VL53L8CX, CONFIG_SENSOR_LOG_LEVEL);
 
@@ -47,6 +48,8 @@ static int vl53l8cx_attr_set(const struct device *dev,
 		}
 
 		if (val->val1 == 0) {
+			LOG_INF(" -- Stop ranging");
+			vl53l8cx_stop_ranging(&data->vl53l8cx_private_config);
 			// Disable continuous mode
 			vl53l8cx_set_ranging_mode(
 				&data->vl53l8cx_private_config,
@@ -62,6 +65,8 @@ static int vl53l8cx_attr_set(const struct device *dev,
 				&data->vl53l8cx_private_config,
 				VL53L8CX_RANGING_MODE_CONTINUOUS
 			);
+			LOG_INF(" -- Start ranging");
+			vl53l8cx_start_ranging(&data->vl53l8cx_private_config);
 		}
 
 		LOG_INF("Sample freq set to %d Hz", val->val1);
@@ -73,11 +78,13 @@ static int vl53l8cx_attr_set(const struct device *dev,
 				&data->vl53l8cx_private_config,
 				VL53L8CX_RESOLUTION_4X4
 			);
+			data->num_of_zone = 16;
 		} else if (val->val1 == 64) {
 			vl53l8cx_set_resolution (
 				&data->vl53l8cx_private_config,
 				VL53L8CX_RESOLUTION_8X8
 			);
+			data->num_of_zone = 64;
 		} else {
 			return -EINVAL;
 		}
@@ -109,14 +116,6 @@ static int vl53l8cx_attr_get(const struct device *dev,
 		);
 		val->val1 = tmp_u8;
 		val->val2 = 0;
-		if (val->val1 > 0) {
-			LOG_INF(" -- Start ranging");
-    		vl53l8cx_start_ranging(&data->vl53l8cx_private_config);
-		}
-		else {
-			LOG_INF(" -- Stop ranging");
-    		vl53l8cx_stop_ranging(&data->vl53l8cx_private_config);
-		}
 		return 0;
 
 	case SENSOR_ATTR_RESOLUTION:
@@ -140,10 +139,6 @@ void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 {
 	LOG_INF("vl53l8cx_submit_sync");
 
-	//const struct sensor_read_config *cfg_read = iodev_sqe->sqe.iodev->data;
-	//const struct device *dev = cfg_read->sensor;
-	//const struct fake_sensor_config *cfg = dev->config;
-
 	uint32_t min_buf_len = 16; // TODO
 	uint8_t *buf;
 	uint32_t buf_len;
@@ -160,37 +155,22 @@ void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 		rtio_iodev_sqe_err(iodev_sqe, -ENOMEM);
 		return;
 	}
-#if 0
-	// TODO i2c read
-	k_msleep(200);
-	for (int i = 0; i < buf_len; i++) {
-		buf[i] = (uint8_t)i;
-	}
-#else
 	const struct sensor_read_config *read_cfg = iodev_sqe->sqe.iodev->data;
 	const struct device *dev = read_cfg->sensor;
 	struct vl53l8cx_data *data = dev->data;
-	k_msleep(50);
-	while (true) {
-		uint8_t is_ready;
-		vl53l8cx_check_data_ready(&data->vl53l8cx_private_config, &is_ready);
-		if (is_ready) {
-			ret = vl53l8cx_get_ranging_data(&data->vl53l8cx_private_config, &result_data);
-			// TODO also check status, etc
-			// TODO get resolution
-			memcpy(buf, (uint8_t*)result_data.distance_mm, 16 * sizeof(int16_t));
-			LOG_INF("%d Read data: %d %d %d %d", 
-				ret, result_data.distance_mm[0], result_data.distance_mm[1], result_data.distance_mm[2], result_data.distance_mm[3]);
-			break;
-		}
-		else {
-			//LOG_INF("  not ready");
-		}
-		k_msleep(10);
-	}
-#endif
+	uint8_t is_ready = true;
 
+	ret = vl53l8cx_get_ranging_data(&data->vl53l8cx_private_config, &result_data);
+	// TODO also check status, etc
+	// TODO get resolution
+	memcpy(buf, (uint8_t*)result_data.distance_mm, 16 * sizeof(int16_t));
+	//LOG_INF("%d Read data: %d %d %d %d", 
+	//	ret, result_data.distance_mm[0], result_data.distance_mm[1], result_data.distance_mm[2], result_data.distance_mm[3]);
+
+
+	LOG_INF("vl53l8cx_submit_sync SQE OK");
 	rtio_iodev_sqe_ok(iodev_sqe, 0);
+	LOG_INF("vl53l8cx_submit_sync END");
 }
 
 static void vl53l8cx_submit(const struct device *sensor, struct rtio_iodev_sqe *iodev_sqe)
@@ -225,7 +205,8 @@ static void vl53l8cx_submit(const struct device *sensor, struct rtio_iodev_sqe *
 	LOG_INF("vl53l8cx_submit 3");
 #endif
 
-
+	struct vl53l8cx_data *data = sensor->data;
+#if 0
 	/* Offload execution using the Zephyr standard RTIO workqueue request */
 	struct rtio_work_req *req = rtio_work_req_alloc();
 
@@ -236,25 +217,17 @@ static void vl53l8cx_submit(const struct device *sensor, struct rtio_iodev_sqe *
 
 	/* Dispatch into the RTIO workqueue - the caller thread continues immediately */
 	rtio_work_req_submit(req, iodev_sqe, vl53l8cx_submit_sync);
-	//return 0;
+#else
+	// TODO ?? check if already set ?? use atomic_ptr_cas ?
+	//atomic_ptr_set(&data->pending_sqe, iodev_sqe);
+	if (false == atomic_ptr_cas(&data->pending_sqe, NULL, iodev_sqe)) {
+		LOG_WRN("SQE already pending");
+	}
+	else {
+		LOG_INF("SQE pending");
+	}
+#endif
 }
-
-/////////////////////////////
-
-//static int vl53l8cx_sensor_read()
-//{
-//	int ret;
-//
-//	// TODO
-//	LOG_INF("BLoooooP");
-//
-//	return 0;
-//}
-
-//static DEVICE_API(sensor, vl53l8cx_api_funcs) = {
-//	.sensor_read = vl53l8cx_sensor_read,
-//	//.sensor_decode = vl53l8cx_sensor_decode
-//};
 
 
 #if 1
@@ -279,7 +252,7 @@ static int vl53l8cx_decoder_get_size_info(struct sensor_chan_spec chan_spec,
 		// lokks like base is full data (+metadata), and frame the sample itself
 		//*base_size = sizeof(struct sensor_three_axis_data);
 		//*frame_size = sizeof(struct sensor_three_axis_sample_data);
-		// use same for now
+		// ... use same for now
 		*base_size = sizeof(VL53L8CX_ResultsData);
 		*frame_size = sizeof(VL53L8CX_ResultsData);
 		return 0;
@@ -310,7 +283,7 @@ static int vl53l8cx_decoder_decode(const uint8_t *buffer,
 //
 	///* return number of samples written */
 	//return (*fit_idx);
-	memcpy(data_out, buffer, 16);
+	memcpy(data_out, buffer, 32);
 	*fit_count += sizeof(VL53L8CX_ResultsData);
 	return 1;
 }
@@ -343,8 +316,22 @@ static void vl53l8cx_rdy_callback(const struct device *port,
 								  uint32_t pins)
 {
 	//struct vl53l8cx_data *data = CONTAINER_OF(cb, struct vl53l8cx_data, gpio_cb);
+	struct vl53l8cx_data *data = CONTAINER_OF(cb, struct vl53l8cx_data, rdy_cb);
+	//atomic_ptr_t sqe = NULL;
+	struct rtio_iodev_sqe *sqe = NULL;
+
+	LOG_INF("INT start");
+	sqe = atomic_ptr_set(&data->pending_sqe, NULL);
+	if (sqe != NULL) {
+		struct rtio_work_req *req = rtio_work_req_alloc();
+		if (req == NULL) {
+			rtio_iodev_sqe_err(sqe, -ENOMEM);
+			return;
+		}
+		rtio_work_req_submit(req, sqe, vl53l8cx_submit_sync);
+	}
 	
-	LOG_INF("INT read ready !");
+	LOG_INF("INT read ready ! num_of_zone: %d", data->num_of_zone);
 }
 
 
@@ -358,6 +345,7 @@ static int vl53l8cx_driver_init(const struct device *dev)
 	data->vl53l8cx_private_config.platform.config = config;
 	data->vl53l8cx_private_config.platform.address = config->i2c.addr;
 	int ret = 0;
+	uint8_t tmp_u8 = 0;
 
 	// GPIO lpn
 	if (!gpio_is_ready_dt(&config->lpn)) {
@@ -380,14 +368,15 @@ static int vl53l8cx_driver_init(const struct device *dev)
 		LOG_ERR("GPIO port %s failed to set low", config->pwr.port->name);
 		return -ENODEV;
 	}
-#if 0
+#if 1
 	// GPIO rdy (read ready)
-	if (!gpio_is_ready_dt(&config->rdy)) {
+	if (! gpio_is_ready_dt(&config->rdy)) {
 		LOG_ERR("GPIO port %s not ready", config->rdy.port->name);
-		return -ENODEV;
+		return ret;
 	}
-	if (!gpio_pin_configure_dt(&config->rdy, GPIO_INPUT)) {
-		LOG_ERR("GPIO port %s failed to set as input", config->rdy.port->name);
+	ret = gpio_pin_configure_dt(&config->rdy, GPIO_INPUT); 
+	if (ret != 0) {
+		LOG_ERR("GPIO port %s failed to set as input: %i", config->rdy.port->name, ret);
 		return ret;
 	}
 	gpio_init_callback(&data->rdy_cb, vl53l8cx_rdy_callback, BIT(config->rdy.pin));
@@ -416,12 +405,25 @@ static int vl53l8cx_driver_init(const struct device *dev)
 	LOG_INF("[%s] is reset", dev->name);
 
 	// ST driver upload FW to HW
-	// Taking 2 sec @ 400KHz
+	// Takes 2 sec @ 400KHz
 	ret = vl53l8cx_init(&data->vl53l8cx_private_config);
 	if (ret != 0) {
 		LOG_ERR("[%s] Failed to init", dev->name);
 		return ret;
 	}
+
+	// get current resolution, required to extract results
+	ret = vl53l8cx_get_resolution (
+		&data->vl53l8cx_private_config,
+		&tmp_u8
+	);
+	if (ret != 0) {
+		LOG_ERR("[%s] Failed get resolution", dev->name);
+		return ret;
+	}
+	data->num_of_zone = tmp_u8;
+
+	data->pending_sqe = ATOMIC_PTR_INIT(NULL);
 
 	LOG_INF("[%s] Initialized", dev->name);
 	return 0;

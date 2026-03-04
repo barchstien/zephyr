@@ -35,12 +35,16 @@ struct vl53l8cx_data {
      */
     VL53L8CX_Configuration vl53l8cx_private_config;
 
+    uint8_t num_of_zone;
+
     /**
      * Call back for INT, aka ready to read
      */
     struct gpio_callback rdy_cb;
 
-    struct rtio_iodev_sqe *sqe;
+    // keep ?
+    //struct rtio_iodev_sqe *sqe;
+    atomic_ptr_t pending_sqe;
 
     // Max 30Hz 4x4, max 15Hz 8x8
     // already in attributes
