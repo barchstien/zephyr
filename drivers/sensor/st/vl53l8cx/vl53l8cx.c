@@ -133,13 +133,14 @@ static int vl53l8cx_attr_get(const struct device *dev,
 }
 
 // debug
-static VL53L8CX_ResultsData result_data;
+//static VL53L8CX_ResultsData result_data;
 
 void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 {
-	LOG_INF("vl53l8cx_submit_sync");
+	//LOG_INF("vl53l8cx_submit_sync");
 
-	uint32_t min_buf_len = 16; // TODO
+	//uint32_t min_buf_len = 64 * 2 + 1; // TODO
+	uint32_t min_buf_len = sizeof(VL53L8CX_ResultsData) + 1;
 	uint8_t *buf;
 	uint32_t buf_len;
 
@@ -158,53 +159,29 @@ void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 	const struct sensor_read_config *read_cfg = iodev_sqe->sqe.iodev->data;
 	const struct device *dev = read_cfg->sensor;
 	struct vl53l8cx_data *data = dev->data;
-	uint8_t is_ready = true;
 
-	ret = vl53l8cx_get_ranging_data(&data->vl53l8cx_private_config, &result_data);
+	//ret = vl53l8cx_get_ranging_data(&data->vl53l8cx_private_config, &result_data);
+	buf[0] = data->num_of_zone;
+	ret = vl53l8cx_get_ranging_data(&data->vl53l8cx_private_config, (VL53L8CX_ResultsData *)(buf + 1));
 	// TODO also check status, etc
-	// TODO get resolution
-	memcpy(buf, (uint8_t*)result_data.distance_mm, 16 * sizeof(int16_t));
+	// TODO add num of zone in 1st byte
+	// Correct data
+	//for (int i=0)
+	//memcpy(buf, (uint8_t*)result_data.distance_mm, data->num_of_zone * sizeof(int16_t));
 	//LOG_INF("%d Read data: %d %d %d %d", 
 	//	ret, result_data.distance_mm[0], result_data.distance_mm[1], result_data.distance_mm[2], result_data.distance_mm[3]);
 
+	// ??! TODO just copy VL53L8CX_ResultsData, coz RTI should no be processing data
+	// it's 1360 bytes
+	// that would avoid needing a static VL53L8CX_ResultsData
 
-	LOG_INF("vl53l8cx_submit_sync SQE OK");
+	//LOG_INF("vl53l8cx_submit_sync SQE OK");
 	rtio_iodev_sqe_ok(iodev_sqe, 0);
-	LOG_INF("vl53l8cx_submit_sync END");
+	//LOG_INF("vl53l8cx_submit_sync END");
 }
 
 static void vl53l8cx_submit(const struct device *sensor, struct rtio_iodev_sqe *iodev_sqe)
 {
-#if 0
-	//const struct rtio_sqe *sqe = &(iodev_sqe->sqe);
-	uint32_t min_buf_len = 16; // TODO
-	uint8_t *buf;
-	uint32_t buf_len;
-
-	int ret = rtio_sqe_rx_buf(
-		iodev_sqe, 
-		min_buf_len, 
-		min_buf_len, 
-		&buf, 
-		&buf_len
-	);
-	if (ret != 0) {
-		LOG_ERR("Failed to allocate buffer from mempool");
-		rtio_iodev_sqe_err(iodev_sqe, -ENOMEM);
-		return;
-	}
-	LOG_INF("vl53l8cx_submit buf_len: %d", buf_len);
-
-	// TODO i2c read
-	//vl53l8cx_submit_sync
-	for (int i = 0; i < buf_len; i++) {
-		buf[i] = (uint8_t)i;
-	}
-	LOG_INF("vl53l8cx_submit 2");
-	rtio_iodev_sqe_ok(iodev_sqe, 0);
-	LOG_INF("vl53l8cx_submit 3");
-#endif
-
 	struct vl53l8cx_data *data = sensor->data;
 #if 0
 	/* Offload execution using the Zephyr standard RTIO workqueue request */
@@ -224,7 +201,7 @@ static void vl53l8cx_submit(const struct device *sensor, struct rtio_iodev_sqe *
 		LOG_WRN("SQE already pending");
 	}
 	else {
-		LOG_INF("SQE pending");
+		//LOG_INF("SQE pending");
 	}
 #endif
 }
@@ -253,8 +230,8 @@ static int vl53l8cx_decoder_get_size_info(struct sensor_chan_spec chan_spec,
 		//*base_size = sizeof(struct sensor_three_axis_data);
 		//*frame_size = sizeof(struct sensor_three_axis_sample_data);
 		// ... use same for now
-		*base_size = sizeof(VL53L8CX_ResultsData);
-		*frame_size = sizeof(VL53L8CX_ResultsData);
+		*base_size = sizeof(VL53L8CX_ResultsData) + 1;
+		*frame_size = sizeof(VL53L8CX_ResultsData) + 1;
 		return 0;
 	default:
 		return -ENOTSUP;
@@ -283,7 +260,26 @@ static int vl53l8cx_decoder_decode(const uint8_t *buffer,
 //
 	///* return number of samples written */
 	//return (*fit_idx);
-	memcpy(data_out, buffer, 32);
+	// TODO, use the 1st byte to give the length
+	//memcpy(data_out, buffer, 64*2);
+	//memcpy(buf, (uint8_t*)result_data.distance_mm, data->num_of_zone * sizeof(int16_t));
+	uint8_t zone_cnt = buffer[0];
+	const VL53L8CX_ResultsData *result_data = (VL53L8CX_ResultsData*)(&buffer[1]);
+	memcpy(data_out, (uint8_t*)result_data->distance_mm, zone_cnt * sizeof(int16_t));
+	int16_t *distance_mm_out = (int16_t*)data_out;
+
+	for (int i=0; i<zone_cnt; i++) {
+		if (result_data->nb_target_detected[i] == 0) {
+			//LOG_WRN("no target-------------");
+			distance_mm_out[i] = 8000;
+		}
+		if (result_data->target_status[i] != 5 && result_data->target_status[i] != 9) {
+			//LOG_WRN("bad status ===================");
+			// if bad status, use max
+			distance_mm_out[i] = 8000;
+		}
+	}
+
 	*fit_count += sizeof(VL53L8CX_ResultsData);
 	return 1;
 }
@@ -320,7 +316,7 @@ static void vl53l8cx_rdy_callback(const struct device *port,
 	//atomic_ptr_t sqe = NULL;
 	struct rtio_iodev_sqe *sqe = NULL;
 
-	LOG_INF("INT start");
+	//LOG_INF("INT start");
 	sqe = atomic_ptr_set(&data->pending_sqe, NULL);
 	if (sqe != NULL) {
 		struct rtio_work_req *req = rtio_work_req_alloc();
@@ -331,7 +327,7 @@ static void vl53l8cx_rdy_callback(const struct device *port,
 		rtio_work_req_submit(req, sqe, vl53l8cx_submit_sync);
 	}
 	
-	LOG_INF("INT read ready ! num_of_zone: %d", data->num_of_zone);
+	//LOG_INF("INT read ready ! num_of_zone: %d", data->num_of_zone);
 }
 
 
@@ -346,6 +342,8 @@ static int vl53l8cx_driver_init(const struct device *dev)
 	data->vl53l8cx_private_config.platform.address = config->i2c.addr;
 	int ret = 0;
 	uint8_t tmp_u8 = 0;
+
+	LOG_INF("sizeof(VL53L8CX_ResultsData): %d", sizeof(VL53L8CX_ResultsData));
 
 	// GPIO lpn
 	if (!gpio_is_ready_dt(&config->lpn)) {
