@@ -12,6 +12,8 @@
 #include "vl53l8cx_api.h"
 #include "vl53l8cx_platform.h"
 
+#define MAX_DISTANCE_MM 4000
+
 /**
  * Config for Zephyr Sensor Device
  * Used in SENSOR_DEVICE_DT_INST_DEFINE
@@ -45,6 +47,7 @@ struct vl53l8cx_data {
     // keep ?
     //struct rtio_iodev_sqe *sqe;
     atomic_ptr_t pending_sqe;
+    atomic_t last_interrupt_timepoint;
 
     // Max 30Hz 4x4, max 15Hz 8x8
     // already in attributes

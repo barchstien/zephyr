@@ -24,10 +24,15 @@
 #include <zephyr/rtio/work.h>
 #include <zephyr/sys/atomic.h>
 
+/**
+ * 1 Bytes zone count (16 or 64)
+ * 8 bytes timestamp
+ * VL53L8CX_ResultsData ST made, can be reduced using defines
+ * 						@see modules/has/st/sensor/vl53l8cx/api
+ */
+#define SENSOR_RAW_DATA_LEN (1 + 8 + sizeof(VL53L8CX_ResultsData))
+
 LOG_MODULE_REGISTER(VL53L8CX, CONFIG_SENSOR_LOG_LEVEL);
-
-
-//////////////////////////////////////////////////////////////////////////
 
 static int vl53l8cx_attr_set(const struct device *dev,
 							 enum sensor_channel chan,
@@ -132,22 +137,15 @@ static int vl53l8cx_attr_get(const struct device *dev,
 	}
 }
 
-// debug
-//static VL53L8CX_ResultsData result_data;
-
 void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 {
-	//LOG_INF("vl53l8cx_submit_sync");
-
-	//uint32_t min_buf_len = 64 * 2 + 1; // TODO
-	uint32_t min_buf_len = sizeof(VL53L8CX_ResultsData) + 1;
 	uint8_t *buf;
 	uint32_t buf_len;
 
 	int ret = rtio_sqe_rx_buf(
 		iodev_sqe, 
-		min_buf_len, 
-		min_buf_len, 
+		SENSOR_RAW_DATA_LEN, 
+		SENSOR_RAW_DATA_LEN, 
 		&buf, 
 		&buf_len
 	);
@@ -160,57 +158,20 @@ void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 	const struct device *dev = read_cfg->sensor;
 	struct vl53l8cx_data *data = dev->data;
 
-	//ret = vl53l8cx_get_ranging_data(&data->vl53l8cx_private_config, &result_data);
 	buf[0] = data->num_of_zone;
-	ret = vl53l8cx_get_ranging_data(&data->vl53l8cx_private_config, (VL53L8CX_ResultsData *)(buf + 1));
-	// TODO also check status, etc
-	// TODO add num of zone in 1st byte
-	// Correct data
-	//for (int i=0)
-	//memcpy(buf, (uint8_t*)result_data.distance_mm, data->num_of_zone * sizeof(int16_t));
-	//LOG_INF("%d Read data: %d %d %d %d", 
-	//	ret, result_data.distance_mm[0], result_data.distance_mm[1], result_data.distance_mm[2], result_data.distance_mm[3]);
-
-	// ??! TODO just copy VL53L8CX_ResultsData, coz RTI should no be processing data
-	// it's 1360 bytes
-	// that would avoid needing a static VL53L8CX_ResultsData
-
-	//LOG_INF("vl53l8cx_submit_sync SQE OK");
+	*(uint32_t*)(&buf[1]) = (uint32_t)atomic_get(&data->last_interrupt_timepoint);
+	ret = vl53l8cx_get_ranging_data(&data->vl53l8cx_private_config, (VL53L8CX_ResultsData *)(buf + 5));
 	rtio_iodev_sqe_ok(iodev_sqe, 0);
-	//LOG_INF("vl53l8cx_submit_sync END");
 }
 
 static void vl53l8cx_submit(const struct device *sensor, struct rtio_iodev_sqe *iodev_sqe)
 {
 	struct vl53l8cx_data *data = sensor->data;
-#if 0
-	/* Offload execution using the Zephyr standard RTIO workqueue request */
-	struct rtio_work_req *req = rtio_work_req_alloc();
-
-	if (req == NULL) {
-		rtio_iodev_sqe_err(iodev_sqe, -ENOMEM);
-		return;
-	}
-
-	/* Dispatch into the RTIO workqueue - the caller thread continues immediately */
-	rtio_work_req_submit(req, iodev_sqe, vl53l8cx_submit_sync);
-#else
-	// TODO ?? check if already set ?? use atomic_ptr_cas ?
-	//atomic_ptr_set(&data->pending_sqe, iodev_sqe);
 	if (false == atomic_ptr_cas(&data->pending_sqe, NULL, iodev_sqe)) {
 		LOG_WRN("SQE already pending");
 	}
-	else {
-		//LOG_INF("SQE pending");
-	}
-#endif
 }
 
-
-#if 1
-/*
- * DECODER: Splits raw buffer into 64 Q31 integers
- */
 static int vl53l8cx_decoder_get_frame_count(const uint8_t *buffer,
 		struct sensor_chan_spec channel,
 		uint16_t *frame_count)
@@ -230,8 +191,8 @@ static int vl53l8cx_decoder_get_size_info(struct sensor_chan_spec chan_spec,
 		//*base_size = sizeof(struct sensor_three_axis_data);
 		//*frame_size = sizeof(struct sensor_three_axis_sample_data);
 		// ... use same for now
-		*base_size = sizeof(VL53L8CX_ResultsData) + 1;
-		*frame_size = sizeof(VL53L8CX_ResultsData) + 1;
+		*base_size = sizeof(VL53L8CX_ResultsData) + 1 + 4;
+		*frame_size = sizeof(VL53L8CX_ResultsData) + 1 + 4;
 		return 0;
 	default:
 		return -ENOTSUP;
@@ -244,41 +205,32 @@ static int vl53l8cx_decoder_decode(const uint8_t *buffer,
 								   uint16_t max_count,
 								   void *data_out)
 {
-	//const int32_t *raw_ints = (const int32_t *)buffer;
-	//q31_t *out = (q31_t *)data_out;
-//
-	//if (*fit_idx >= SENSOR_NUM_SAMPLES) {
-	//	return 0; /* No more data to decode */
-	//}
-//
-	///* Convert Raw int32 to Q31 (Example: 1:1 mapping) */
-	//for (int i = 0; i < max_count && *fit_idx < SENSOR_NUM_SAMPLES; i++) {
-	//	out[i] = raw_ints[*fit_idx];
-	//	(*fit_idx)++;
-	//}
-	// TODO check channels, distance, status, etc
-//
-	///* return number of samples written */
-	//return (*fit_idx);
-	// TODO, use the 1st byte to give the length
-	//memcpy(data_out, buffer, 64*2);
-	//memcpy(buf, (uint8_t*)result_data.distance_mm, data->num_of_zone * sizeof(int16_t));
 	uint8_t zone_cnt = buffer[0];
-	const VL53L8CX_ResultsData *result_data = (VL53L8CX_ResultsData*)(&buffer[1]);
-	memcpy(data_out, (uint8_t*)result_data->distance_mm, zone_cnt * sizeof(int16_t));
-	int16_t *distance_mm_out = (int16_t*)data_out;
+	const VL53L8CX_ResultsData *result_data = (VL53L8CX_ResultsData*)(&buffer[5]);
+	uint8_t *buffer_out = (uint8_t*)data_out;
+	int16_t *distance_mm_out = (int16_t*)(buffer_out + 5);
 
+	
+	// zone count, 16 or 64
+	buffer_out[0] = zone_cnt;
+	// 32 bit timestamp
+	memcpy(&buffer_out[1], &buffer[1], sizeof(int32_t));
+	// distance per zone
+	memcpy(buffer_out + 5, (uint8_t*)result_data->distance_mm, zone_cnt * sizeof(int16_t));
+	// ... replace invalid data by max distance
 	for (int i=0; i<zone_cnt; i++) {
 		if (result_data->nb_target_detected[i] == 0) {
-			//LOG_WRN("no target-------------");
-			distance_mm_out[i] = 8000;
+			distance_mm_out[i] = MAX_DISTANCE_MM;
 		}
 		if (result_data->target_status[i] != 5 && result_data->target_status[i] != 9) {
-			//LOG_WRN("bad status ===================");
-			// if bad status, use max
-			distance_mm_out[i] = 8000;
+			distance_mm_out[i] = MAX_DISTANCE_MM;
 		}
 	}
+
+	// TODO, change data in "normalised whatnot" thingy
+	// Meaning scale it to use 4096 (2^12), which is easy coz value is between 0 and 4000 mm
+	// Also the "shift" should be clarified
+	// |--> is it about using whole q15 and shitdt by 3, coz 12 + 3 = 15 ?	
 
 	*fit_count += sizeof(VL53L8CX_ResultsData);
 	return 1;
@@ -304,19 +256,15 @@ static const struct sensor_driver_api vl53l8cx_api_funcs = {
 	.submit = vl53l8cx_submit
 };
 
-#endif
-
 
 static void vl53l8cx_rdy_callback(const struct device *port,
 								  struct gpio_callback *cb,
 								  uint32_t pins)
 {
-	//struct vl53l8cx_data *data = CONTAINER_OF(cb, struct vl53l8cx_data, gpio_cb);
 	struct vl53l8cx_data *data = CONTAINER_OF(cb, struct vl53l8cx_data, rdy_cb);
-	//atomic_ptr_t sqe = NULL;
 	struct rtio_iodev_sqe *sqe = NULL;
 
-	//LOG_INF("INT start");
+	atomic_set(&data->last_interrupt_timepoint, k_uptime_get_32());
 	sqe = atomic_ptr_set(&data->pending_sqe, NULL);
 	if (sqe != NULL) {
 		struct rtio_work_req *req = rtio_work_req_alloc();
@@ -326,8 +274,6 @@ static void vl53l8cx_rdy_callback(const struct device *port,
 		}
 		rtio_work_req_submit(req, sqe, vl53l8cx_submit_sync);
 	}
-	
-	//LOG_INF("INT read ready ! num_of_zone: %d", data->num_of_zone);
 }
 
 
@@ -421,7 +367,50 @@ static int vl53l8cx_driver_init(const struct device *dev)
 	}
 	data->num_of_zone = tmp_u8;
 
-	data->pending_sqe = ATOMIC_PTR_INIT(NULL);
+	// TODO test ranging mode
+	// default is autonomous (good for pwoer), continuous (good for perf)
+	ret = vl53l8cx_set_ranging_mode (
+		&data->vl53l8cx_private_config,
+		VL53L8CX_RANGING_MODE_CONTINUOUS
+	);
+	if (ret != 0) {
+		LOG_ERR("[%s] Failed to set ranging mode", dev->name);
+		return ret;
+	}
+
+	// repeat count to trigger temp realted calibration
+	// takes few msec
+	ret = vl53l8cx_set_VHV_repeat_count (
+		&data->vl53l8cx_private_config,
+		150 // TODO, make it better
+	);
+	if (ret != 0) {
+		LOG_ERR("[%s] Failed to set ranging mode", dev->name);
+		return ret;
+	}
+
+	// TODO test sharpener [0;99]%, default 1%
+	//ret = vl53l8cx_set_sharpener_percent (
+	//	&data->vl53l8cx_private_config,
+	//	0
+	//);
+	//if (ret != 0) {
+	//	LOG_ERR("[%s] Failed to set sharpener percent", dev->name);
+	//	return ret;
+	//}
+
+	// TODO test 1st/strongest target
+	// default is stronger, and it's recommended for indoor (why?)
+	ret = vl53l8cx_set_target_order (
+		&data->vl53l8cx_private_config,
+		VL53L8CX_TARGET_ORDER_CLOSEST
+	);
+	if (ret != 0) {
+		LOG_ERR("[%s] Failed to set target order", dev->name);
+		return ret;
+	}
+
+	// TODO more ?
 
 	LOG_INF("[%s] Initialized", dev->name);
 	return 0;
@@ -435,7 +424,10 @@ static int vl53l8cx_driver_init(const struct device *dev)
 		.rdy = GPIO_DT_SPEC_INST_GET_OR(i, rdy_gpios, { 0 }), \
 	}; \
 	\
-	static struct vl53l8cx_data vl53l8cx_data_##i; \
+	static struct vl53l8cx_data vl53l8cx_data_##i = { \
+		.last_interrupt_timepoint = ATOMIC_INIT(0), \
+		.pending_sqe = ATOMIC_PTR_INIT(NULL) \
+	}; \
 	\
 	SENSOR_DEVICE_DT_INST_DEFINE(\
 		i, \
