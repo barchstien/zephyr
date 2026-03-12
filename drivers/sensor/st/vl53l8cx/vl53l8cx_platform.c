@@ -44,16 +44,17 @@ uint8_t VL53L8CX_WrMulti(
 {
 	int ret;
 	const uint32_t CHUNK_MAX_SIZE = 64;
-	// reserver 2 bytes for register address
+	// reserve 2 bytes for register address
 	const uint32_t DATA_WRITE_MAX_SIZE = CHUNK_MAX_SIZE - 2;
 	uint8_t buffer[CHUNK_MAX_SIZE];
 	uint32_t i = 0;
 
-	// Write by chuks, to reduce RAM use
+	// Write by chunks, to reduce RAM use
 	while (i < size) {
 		const uint16_t reg_addr = RegisterAdress + i;
 		uint32_t chunk_size = CHUNK_MAX_SIZE;
 		if (size - i < DATA_WRITE_MAX_SIZE) {
+			// last chunk isn't always full
 			chunk_size = size - i + 2;
 		}
 		// prefix data with reg address, MSB first
@@ -70,7 +71,6 @@ uint8_t VL53L8CX_WrMulti(
 			LOG_ERR("Failed to to write to i2c: %d", ret);
 			return 255;
 		}
-		// 2 bytes are reserved for register address
 		i += DATA_WRITE_MAX_SIZE;
 	}
 	

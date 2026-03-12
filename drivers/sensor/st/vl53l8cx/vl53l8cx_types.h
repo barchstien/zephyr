@@ -8,6 +8,7 @@
 
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/dsp/types.h>
 
 #include "vl53l8cx_api.h"
 #include "vl53l8cx_platform.h"
@@ -29,7 +30,7 @@ struct vl53l8cx_config {
  * Private data to Zephyr Sensor Device
  * Used in SENSOR_DEVICE_DT_INST_DEFINE
  */
-struct vl53l8cx_data {
+struct vl53l8cx_inst_data {
     /**
      * STM defined driver structure that "contains the sensor configuration"
      * @warning "User MUST not manually change these field, except for the sensor address"
@@ -39,24 +40,14 @@ struct vl53l8cx_data {
 
     uint8_t num_of_zone;
 
-    /**
-     * Call back for INT, aka ready to read
-     */
+    /** Call back for INT, aka ready to read */
     struct gpio_callback rdy_cb;
 
-    // keep ?
-    //struct rtio_iodev_sqe *sqe;
+    /** Submitted upon interrupt */
     atomic_ptr_t pending_sqe;
-    atomic_t last_interrupt_timepoint;
 
-    // Max 30Hz 4x4, max 15Hz 8x8
-    // already in attributes
-    //uint8_t sample_freq;
-	
-    // TODO, coz zephyr doc says that preferred flow is via interrupts
-//#ifdef CONFIG_vl53l8cx_INTERRUPT_MODE
-//	struct gpio_callback gpio_cb;
-//	struct k_work work;
-//	const struct device *dev;
-//#endif
+    /** Taken on interrupt */
+    atomic_t last_interrupt_timestamp;
+
+    bool is_streaming;
 };

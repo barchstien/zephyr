@@ -19,10 +19,13 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
+#include <zephyr/drivers/sensor/vl53l8cx.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/rtio/rtio.h>
 #include <zephyr/rtio/work.h>
 #include <zephyr/sys/atomic.h>
+
+// TODO, use SENSOR_DT_STREAM_IODEV
 
 /**
  * 1 Bytes zone count (16 or 64)
@@ -32,14 +35,14 @@
  */
 #define SENSOR_RAW_DATA_LEN (1 + 8 + sizeof(VL53L8CX_ResultsData))
 
-LOG_MODULE_REGISTER(VL53L8CX, CONFIG_SENSOR_LOG_LEVEL);
+LOG_MODULE_REGISTER(vl53l8cx, CONFIG_SENSOR_LOG_LEVEL);
 
 static int vl53l8cx_attr_set(const struct device *dev,
 							 enum sensor_channel chan,
 							 enum sensor_attribute attr,
 							 const struct sensor_value *val)
 {
-	struct vl53l8cx_data *data = dev->data;
+	struct vl53l8cx_inst_data *data = dev->data;
 
 	if (chan != SENSOR_CHAN_ALL && chan != SENSOR_CHAN_DISTANCE) {
 		return -ENOTSUP;
@@ -47,33 +50,14 @@ static int vl53l8cx_attr_set(const struct device *dev,
 
 	switch (attr) {
 	case SENSOR_ATTR_SAMPLING_FREQUENCY:
-		if (val->val1 < 0 || val->val1 > 30) {
-			LOG_ERR("Expect sample freq in [0; 30] but got: %d Hz", val->val1);
+		if (val->val1 < 1 || val->val1 > 60) {
+			LOG_ERR("Sample freq shoudl be within [0; 60] for 4x4, or [0; 15] for 8x8. Got: %d Hz", val->val1);
 			return -EINVAL;
 		}
-
-		if (val->val1 == 0) {
-			LOG_INF(" -- Stop ranging");
-			vl53l8cx_stop_ranging(&data->vl53l8cx_private_config);
-			// Disable continuous mode
-			vl53l8cx_set_ranging_mode(
-				&data->vl53l8cx_private_config,
-				VL53L8CX_RANGING_MODE_AUTONOMOUS
-			);
-		} else {
-			// set freq and enable continuous mode
-			vl53l8cx_set_ranging_frequency_hz(
-				&data->vl53l8cx_private_config,
-				val->val1
-			);
-			vl53l8cx_set_ranging_mode(
-				&data->vl53l8cx_private_config,
-				VL53L8CX_RANGING_MODE_CONTINUOUS
-			);
-			LOG_INF(" -- Start ranging");
-			vl53l8cx_start_ranging(&data->vl53l8cx_private_config);
-		}
-
+		vl53l8cx_set_ranging_frequency_hz(
+			&data->vl53l8cx_private_config,
+			val->val1
+		);
 		LOG_INF("Sample freq set to %d Hz", val->val1);
 		return 0;
 
@@ -106,7 +90,7 @@ static int vl53l8cx_attr_get(const struct device *dev,
 							 enum sensor_attribute attr,
 							 struct sensor_value *val)
 {
-	struct vl53l8cx_data *data = dev->data;
+	struct vl53l8cx_inst_data *data = dev->data;
 	uint8_t tmp_u8;
 
 	if (chan != SENSOR_CHAN_ALL && chan != SENSOR_CHAN_DISTANCE) {
@@ -141,6 +125,19 @@ void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 {
 	uint8_t *buf;
 	uint32_t buf_len;
+	const struct sensor_read_config *cfg = iodev_sqe->sqe.iodev->data;
+	const struct device *dev = cfg->sensor;
+	struct vl53l8cx_inst_data *data = dev->data;
+
+	// stream stop
+	if (FIELD_GET(RTIO_SQE_CANCELED, iodev_sqe->sqe.flags)) {
+		atomic_ptr_set(&data->pending_sqe, NULL);
+		LOG_INF(" -- Stop ranging RTIO_SQE_CANCELED");
+		vl53l8cx_stop_ranging(&data->vl53l8cx_private_config);
+		//rtio_iodev_sqe_err(iodev_sqe, -ECANCELED);
+		data->is_streaming = false;
+		return;
+	}
 
 	int ret = rtio_sqe_rx_buf(
 		iodev_sqe, 
@@ -154,21 +151,47 @@ void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 		rtio_iodev_sqe_err(iodev_sqe, -ENOMEM);
 		return;
 	}
-	const struct sensor_read_config *read_cfg = iodev_sqe->sqe.iodev->data;
-	const struct device *dev = read_cfg->sensor;
-	struct vl53l8cx_data *data = dev->data;
 
 	buf[0] = data->num_of_zone;
-	*(uint32_t*)(&buf[1]) = (uint32_t)atomic_get(&data->last_interrupt_timepoint);
+	*(uint32_t*)(&buf[1]) = (uint32_t)atomic_get(&data->last_interrupt_timestamp);
 	ret = vl53l8cx_get_ranging_data(&data->vl53l8cx_private_config, (VL53L8CX_ResultsData *)(buf + 5));
 	rtio_iodev_sqe_ok(iodev_sqe, 0);
+
+	// Stop ranging if it was a single shot
+	if (!cfg->is_streaming) {
+		//LOG_INF(" -- Stop ranging (not streaming)");
+		vl53l8cx_stop_ranging(&data->vl53l8cx_private_config);
+	}
 }
 
 static void vl53l8cx_submit(const struct device *sensor, struct rtio_iodev_sqe *iodev_sqe)
 {
-	struct vl53l8cx_data *data = sensor->data;
+	struct vl53l8cx_inst_data *data = sensor->data;
+    const struct sensor_read_config *cfg = iodev_sqe->sqe.iodev->data;
+
+	// Set pending sqe if it's not already set
+	// rtio submit happens in "data ready" interrupt handler
 	if (false == atomic_ptr_cas(&data->pending_sqe, NULL, iodev_sqe)) {
-		LOG_WRN("SQE already pending");
+		if (cfg->is_streaming) {
+			LOG_WRN("SQE already streaming");
+		}
+		else {
+			LOG_WRN("SQE already pending");
+		}
+		rtio_iodev_sqe_err(iodev_sqe, -EBUSY);
+		return;
+	}
+
+	// stream start
+	if (cfg->is_streaming && !data->is_streaming) {
+		LOG_INF(" -- Start ranging stream");
+		vl53l8cx_start_ranging(&data->vl53l8cx_private_config);
+		data->is_streaming = true;
+	}
+	// one shot start
+	if (!cfg->is_streaming) {
+		//LOG_INF(" -- Start ranging one shot");
+		vl53l8cx_start_ranging(&data->vl53l8cx_private_config);
 	}
 }
 
@@ -176,7 +199,7 @@ static int vl53l8cx_decoder_get_frame_count(const uint8_t *buffer,
 		struct sensor_chan_spec channel,
 		uint16_t *frame_count)
 {
-	// always receiving frames 1 by 1
+	// always receive frames 1 by 1
 	*frame_count = 1;
 	return 0;
 }
@@ -187,12 +210,8 @@ static int vl53l8cx_decoder_get_size_info(struct sensor_chan_spec chan_spec,
 {
 	switch (chan_spec.chan_type) {
 	case SENSOR_CHAN_DISTANCE:
-		// lokks like base is full data (+metadata), and frame the sample itself
-		//*base_size = sizeof(struct sensor_three_axis_data);
-		//*frame_size = sizeof(struct sensor_three_axis_sample_data);
-		// ... use same for now
-		*base_size = sizeof(VL53L8CX_ResultsData) + 1 + 4;
-		*frame_size = sizeof(VL53L8CX_ResultsData) + 1 + 4;
+		*base_size = sizeof(struct vl53l8cx_result_data);
+		*frame_size = sizeof(struct vl53l8cx_result_data);
 		return 0;
 	default:
 		return -ENOTSUP;
@@ -205,25 +224,32 @@ static int vl53l8cx_decoder_decode(const uint8_t *buffer,
 								   uint16_t max_count,
 								   void *data_out)
 {
-	uint8_t zone_cnt = buffer[0];
-	const VL53L8CX_ResultsData *result_data = (VL53L8CX_ResultsData*)(&buffer[5]);
-	uint8_t *buffer_out = (uint8_t*)data_out;
-	int16_t *distance_mm_out = (int16_t*)(buffer_out + 5);
+	// input
+	const uint8_t zone_cnt = buffer[0];
+	const uint32_t timestamp = *(uint32_t*)(&buffer[1]);
+	VL53L8CX_ResultsData *in_result = (VL53L8CX_ResultsData*)(&buffer[5]);
+	// output
+	struct vl53l8cx_result_data *out_result = (struct vl53l8cx_result_data*)data_out;
 
+
+	out_result->header.base_timestamp_ns = 1000 * (uint64_t)timestamp;
+	out_result->header.reading_count = 1;
+	out_result->shift = 0;
+	out_result->resolution = zone_cnt;
+	out_result->readings[0].timestamp_delta = 0;
+	memcpy(
+		out_result->readings[0].distance_mm, 
+		(uint8_t*)in_result->distance_mm, 
+		zone_cnt * sizeof(int16_t)
+	);
 	
-	// zone count, 16 or 64
-	buffer_out[0] = zone_cnt;
-	// 32 bit timestamp
-	memcpy(&buffer_out[1], &buffer[1], sizeof(int32_t));
-	// distance per zone
-	memcpy(buffer_out + 5, (uint8_t*)result_data->distance_mm, zone_cnt * sizeof(int16_t));
 	// ... replace invalid data by max distance
 	for (int i=0; i<zone_cnt; i++) {
-		if (result_data->nb_target_detected[i] == 0) {
-			distance_mm_out[i] = MAX_DISTANCE_MM;
+		if (in_result->nb_target_detected[i] == 0) {
+			out_result->readings[0].distance_mm[i] = MAX_DISTANCE_MM;
 		}
-		if (result_data->target_status[i] != 5 && result_data->target_status[i] != 9) {
-			distance_mm_out[i] = MAX_DISTANCE_MM;
+		if (in_result->target_status[i] != 5 && in_result->target_status[i] != 9) {
+			out_result->readings[0].distance_mm[i] = MAX_DISTANCE_MM;
 		}
 	}
 
@@ -232,6 +258,8 @@ static int vl53l8cx_decoder_decode(const uint8_t *buffer,
 	// Also the "shift" should be clarified
 	// |--> is it about using whole q15 and shitdt by 3, coz 12 + 3 = 15 ?	
 
+	// TODO ! this is not right !
+	// is it an iterator ? or an offset ?
 	*fit_count += sizeof(VL53L8CX_ResultsData);
 	return 1;
 }
@@ -257,14 +285,14 @@ static const struct sensor_driver_api vl53l8cx_api_funcs = {
 };
 
 
-static void vl53l8cx_rdy_callback(const struct device *port,
+static void vl53l8cx_rdy_callback(const struct device *dev,
 								  struct gpio_callback *cb,
 								  uint32_t pins)
 {
-	struct vl53l8cx_data *data = CONTAINER_OF(cb, struct vl53l8cx_data, rdy_cb);
+	struct vl53l8cx_inst_data *data = CONTAINER_OF(cb, struct vl53l8cx_inst_data, rdy_cb);
 	struct rtio_iodev_sqe *sqe = NULL;
 
-	atomic_set(&data->last_interrupt_timepoint, k_uptime_get_32());
+	atomic_set(&data->last_interrupt_timestamp, k_uptime_get_32());
 	sqe = atomic_ptr_set(&data->pending_sqe, NULL);
 	if (sqe != NULL) {
 		struct rtio_work_req *req = rtio_work_req_alloc();
@@ -280,10 +308,8 @@ static void vl53l8cx_rdy_callback(const struct device *port,
 static int vl53l8cx_driver_init(const struct device *dev)
 {
 	const struct vl53l8cx_config *config = dev->config;
-	struct vl53l8cx_data *data = dev->data;
+	struct vl53l8cx_inst_data *data = dev->data;
 	// STM vl53l8cx_platform.c requires GPIOs and I2C use
-	//data->vl53l8cx_config.config = config;
-	//data->vl53l8cx_config.platform.address = config->i2c.addr;
 	data->vl53l8cx_private_config.platform.config = config;
 	data->vl53l8cx_private_config.platform.address = config->i2c.addr;
 	int ret = 0;
@@ -349,7 +375,7 @@ static int vl53l8cx_driver_init(const struct device *dev)
 	LOG_INF("[%s] is reset", dev->name);
 
 	// ST driver upload FW to HW
-	// Takes 2 sec @ 400KHz
+	// Takes 2 sec with i2c at 400KHz
 	ret = vl53l8cx_init(&data->vl53l8cx_private_config);
 	if (ret != 0) {
 		LOG_ERR("[%s] Failed to init", dev->name);
@@ -368,7 +394,7 @@ static int vl53l8cx_driver_init(const struct device *dev)
 	data->num_of_zone = tmp_u8;
 
 	// TODO test ranging mode
-	// default is autonomous (good for pwoer), continuous (good for perf)
+	// default is autonomous (good for power), continuous (good for perf)
 	ret = vl53l8cx_set_ranging_mode (
 		&data->vl53l8cx_private_config,
 		VL53L8CX_RANGING_MODE_CONTINUOUS
@@ -378,16 +404,16 @@ static int vl53l8cx_driver_init(const struct device *dev)
 		return ret;
 	}
 
-	// repeat count to trigger temp realted calibration
-	// takes few msec
+	// repeat count to trigger temp calibration "takes few msec"
 	ret = vl53l8cx_set_VHV_repeat_count (
 		&data->vl53l8cx_private_config,
-		150 // TODO, make it better
+		15 * 60 // 1min at 15Hz
 	);
 	if (ret != 0) {
-		LOG_ERR("[%s] Failed to set ranging mode", dev->name);
+		LOG_ERR("[%s] Failed to set VHV repeat count mode", dev->name);
 		return ret;
 	}
+
 
 	// TODO test sharpener [0;99]%, default 1%
 	//ret = vl53l8cx_set_sharpener_percent (
@@ -401,14 +427,14 @@ static int vl53l8cx_driver_init(const struct device *dev)
 
 	// TODO test 1st/strongest target
 	// default is stronger, and it's recommended for indoor (why?)
-	ret = vl53l8cx_set_target_order (
-		&data->vl53l8cx_private_config,
-		VL53L8CX_TARGET_ORDER_CLOSEST
-	);
-	if (ret != 0) {
-		LOG_ERR("[%s] Failed to set target order", dev->name);
-		return ret;
-	}
+	//ret = vl53l8cx_set_target_order (
+	//	&data->vl53l8cx_private_config,
+	//	VL53L8CX_TARGET_ORDER_CLOSEST
+	//);
+	//if (ret != 0) {
+	//	LOG_ERR("[%s] Failed to set target order", dev->name);
+	//	return ret;
+	//}
 
 	// TODO more ?
 
@@ -419,21 +445,22 @@ static int vl53l8cx_driver_init(const struct device *dev)
 #define VL53L8CX_INIT(i) \
 	static const struct vl53l8cx_config vl53l8cx_config_##i = { \
 		.i2c = I2C_DT_SPEC_INST_GET(i), \
-		.lpn = GPIO_DT_SPEC_INST_GET_OR(i, lpn_gpios, { 0 }), \
-		.pwr = GPIO_DT_SPEC_INST_GET_OR(i, pwr_gpios, { 0 }), \
+		.lpn = GPIO_DT_SPEC_INST_GET(i, lpn_gpios), \
+		.pwr = GPIO_DT_SPEC_INST_GET(i, pwr_gpios), \
 		.rdy = GPIO_DT_SPEC_INST_GET_OR(i, rdy_gpios, { 0 }), \
 	}; \
 	\
-	static struct vl53l8cx_data vl53l8cx_data_##i = { \
-		.last_interrupt_timepoint = ATOMIC_INIT(0), \
-		.pending_sqe = ATOMIC_PTR_INIT(NULL) \
+	static struct vl53l8cx_inst_data vl53l8cx_inst_data_##i = { \
+		.last_interrupt_timestamp = ATOMIC_INIT(0), \
+		.pending_sqe = ATOMIC_PTR_INIT(NULL), \
+		.is_streaming = false \
 	}; \
 	\
 	SENSOR_DEVICE_DT_INST_DEFINE(\
 		i, \
 		vl53l8cx_driver_init, \
 		NULL, \
-		&vl53l8cx_data_##i, \
+		&vl53l8cx_inst_data_##i, \
 		&vl53l8cx_config_##i, \
 		POST_KERNEL, \
 		CONFIG_SENSOR_INIT_PRIORITY, \
