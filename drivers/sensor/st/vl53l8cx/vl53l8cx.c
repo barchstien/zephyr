@@ -129,13 +129,12 @@ void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 	const struct device *dev = cfg->sensor;
 	struct vl53l8cx_inst_data *data = dev->data;
 
-	// stream stop
+
 	if (FIELD_GET(RTIO_SQE_CANCELED, iodev_sqe->sqe.flags)) {
 		atomic_ptr_set(&data->pending_sqe, NULL);
-		LOG_INF(" -- Stop ranging RTIO_SQE_CANCELED");
 		vl53l8cx_stop_ranging(&data->vl53l8cx_private_config);
-		//rtio_iodev_sqe_err(iodev_sqe, -ECANCELED);
 		data->is_streaming = false;
+		rtio_iodev_sqe_err(iodev_sqe, -ECANCELED);
 		return;
 	}
 
@@ -159,7 +158,6 @@ void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 
 	// Stop ranging if it was a single shot
 	if (!cfg->is_streaming) {
-		//LOG_INF(" -- Stop ranging (not streaming)");
 		vl53l8cx_stop_ranging(&data->vl53l8cx_private_config);
 	}
 }
@@ -190,7 +188,6 @@ static void vl53l8cx_submit(const struct device *sensor, struct rtio_iodev_sqe *
 	}
 	// one shot start
 	if (!cfg->is_streaming) {
-		//LOG_INF(" -- Start ranging one shot");
 		vl53l8cx_start_ranging(&data->vl53l8cx_private_config);
 	}
 }
@@ -314,8 +311,6 @@ static int vl53l8cx_driver_init(const struct device *dev)
 	data->vl53l8cx_private_config.platform.address = config->i2c.addr;
 	int ret = 0;
 	uint8_t tmp_u8 = 0;
-
-	LOG_INF("sizeof(VL53L8CX_ResultsData): %d", sizeof(VL53L8CX_ResultsData));
 
 	// GPIO lpn
 	if (!gpio_is_ready_dt(&config->lpn)) {
