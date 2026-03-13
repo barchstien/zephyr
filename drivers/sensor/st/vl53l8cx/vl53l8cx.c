@@ -25,15 +25,16 @@
 #include <zephyr/rtio/work.h>
 #include <zephyr/sys/atomic.h>
 
-// TODO, use SENSOR_DT_STREAM_IODEV
-
 /**
+ * Intermediate format, input of decoder:
  * 1 Bytes zone count (16 or 64)
  * 8 bytes timestamp
  * VL53L8CX_ResultsData ST made, can be reduced using defines
  * 						@see modules/has/st/sensor/vl53l8cx/api
  */
 #define SENSOR_RAW_DATA_LEN (1 + 8 + sizeof(VL53L8CX_ResultsData))
+
+#define MAX_DISTANCE_M 4
 
 LOG_MODULE_REGISTER(vl53l8cx, CONFIG_SENSOR_LOG_LEVEL);
 
@@ -223,40 +224,33 @@ static int vl53l8cx_decoder_decode(const uint8_t *buffer,
 {
 	// input
 	const uint8_t zone_cnt = buffer[0];
-	const uint32_t timestamp = *(uint32_t*)(&buffer[1]);
+	const uint32_t timestamp_ms = *(uint32_t*)(&buffer[1]);
 	VL53L8CX_ResultsData *in_result = (VL53L8CX_ResultsData*)(&buffer[5]);
 	// output
 	struct vl53l8cx_result_data *out_result = (struct vl53l8cx_result_data*)data_out;
 
-
-	out_result->header.base_timestamp_ns = 1000 * (uint64_t)timestamp;
+	out_result->header.base_timestamp_ns = 1e6 * (uint64_t)timestamp_ms;
 	out_result->header.reading_count = 1;
-	out_result->shift = 0;
 	out_result->resolution = zone_cnt;
 	out_result->readings[0].timestamp_delta = 0;
-	memcpy(
-		out_result->readings[0].distance_mm, 
-		(uint8_t*)in_result->distance_mm, 
-		zone_cnt * sizeof(int16_t)
-	);
-	
-	// ... replace invalid data by max distance
+
+	// target distance is within [0; 4] meters, 
+	// use double [0; 8], ie [0; 2^3]
+	out_result->shift = 3;
+	const int32_t anti_shift = 15 - out_result->shift;
 	for (int i=0; i<zone_cnt; i++) {
-		if (in_result->nb_target_detected[i] == 0) {
-			out_result->readings[0].distance_mm[i] = MAX_DISTANCE_MM;
+		// replace invalid data by max distance
+		if (in_result->nb_target_detected[i] == 0
+			|| (in_result->target_status[i] != 5 && in_result->target_status[i] != 9)
+		) {
+			out_result->readings[0].distance[i] = MAX_DISTANCE_M << anti_shift;
+			continue;
 		}
-		if (in_result->target_status[i] != 5 && in_result->target_status[i] != 9) {
-			out_result->readings[0].distance_mm[i] = MAX_DISTANCE_MM;
-		}
+		const int32_t normalised_mm = ((int32_t)in_result->distance_mm[i]) << anti_shift;
+		// convert to meter
+		out_result->readings[0].distance[i] = normalised_mm / 1000;
 	}
 
-	// TODO, change data in "normalised whatnot" thingy
-	// Meaning scale it to use 4096 (2^12), which is easy coz value is between 0 and 4000 mm
-	// Also the "shift" should be clarified
-	// |--> is it about using whole q15 and shitdt by 3, coz 12 + 3 = 15 ?	
-
-	// TODO ! this is not right !
-	// is it an iterator ? or an offset ?
 	*fit_count += sizeof(VL53L8CX_ResultsData);
 	return 1;
 }
@@ -408,30 +402,6 @@ static int vl53l8cx_driver_init(const struct device *dev)
 		LOG_ERR("[%s] Failed to set VHV repeat count mode", dev->name);
 		return ret;
 	}
-
-
-	// TODO test sharpener [0;99]%, default 1%
-	//ret = vl53l8cx_set_sharpener_percent (
-	//	&data->vl53l8cx_private_config,
-	//	0
-	//);
-	//if (ret != 0) {
-	//	LOG_ERR("[%s] Failed to set sharpener percent", dev->name);
-	//	return ret;
-	//}
-
-	// TODO test 1st/strongest target
-	// default is stronger, and it's recommended for indoor (why?)
-	//ret = vl53l8cx_set_target_order (
-	//	&data->vl53l8cx_private_config,
-	//	VL53L8CX_TARGET_ORDER_CLOSEST
-	//);
-	//if (ret != 0) {
-	//	LOG_ERR("[%s] Failed to set target order", dev->name);
-	//	return ret;
-	//}
-
-	// TODO more ?
 
 	LOG_INF("[%s] Initialized", dev->name);
 	return 0;

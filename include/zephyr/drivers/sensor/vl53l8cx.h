@@ -28,7 +28,7 @@ struct vl53l8cx_result_data {
 	uint8_t resolution; // 16 or 64 zone
 	struct vl53l8cx_result_sample_data {
         uint32_t timestamp_delta;
-		q15_t distance_mm[64]; 
+		q15_t distance[64]; 
 	} readings[1]; 
 } __attribute__((__packed__));
 
