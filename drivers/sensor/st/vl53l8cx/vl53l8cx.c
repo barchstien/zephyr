@@ -49,7 +49,7 @@ static int vl53l8cx_attr_set(const struct device *dev,
 		return -ENOTSUP;
 	}
 
-	switch (attr) {
+	switch ((int)attr) {
 	case SENSOR_ATTR_SAMPLING_FREQUENCY:
 		if (val->val1 < 1 || val->val1 > 60) {
 			LOG_ERR("Sample freq shoudl be within [0; 60] for 4x4, or [0; 15] for 8x8. Got: %d Hz", val->val1);
@@ -59,28 +59,69 @@ static int vl53l8cx_attr_set(const struct device *dev,
 			&data->vl53l8cx_private_config,
 			val->val1
 		);
-		LOG_INF("Sample freq set to %d Hz", val->val1);
 		return 0;
 
 	case SENSOR_ATTR_RESOLUTION:
-		if (val->val1 == 16) {
+		switch (val->val1) {
+		case SENSOR_ATTR_VL53L8CX_RESOLUTION_4X4:
+		case SENSOR_ATTR_VL53L8CX_RESOLUTION_8X8:
 			vl53l8cx_set_resolution (
 				&data->vl53l8cx_private_config,
-				VL53L8CX_RESOLUTION_4X4
+				val->val1
 			);
-			data->num_of_zone = 16;
-		} else if (val->val1 == 64) {
-			vl53l8cx_set_resolution (
-				&data->vl53l8cx_private_config,
-				VL53L8CX_RESOLUTION_8X8
-			);
-			data->num_of_zone = 64;
-		} else {
+			data->num_of_zone = val->val1;
+			return 0;
+		default:
 			return -EINVAL;
 		}
-		LOG_INF("Resolution set to %d zones", val->val1);
-		return 0;
+	
+	case SENSOR_ATTR_VL53L8CX_RANGING_MODE:
+		switch (val->val1) {
+		case SENSOR_ATTR_VL53L8CX_RANGING_AUTONOMOUS:
+		case SENSOR_ATTR_VL53L8CX_RANGING_CONTINUOUS:
+			vl53l8cx_set_ranging_mode(
+				&data->vl53l8cx_private_config,
+				val->val1
+			);
+			return 0;
+		default:
+			return -EINVAL;
+		}
 
+	case SENSOR_ATTR_VL53L8CX_POWER_MODE:
+		switch (val->val1) {
+		case SENSOR_ATTR_VL53L8CX_POWER_WAKE_UP:
+		case SENSOR_ATTR_VL53L8CX_POWER_SLEEP:
+		case SENSOR_ATTR_VL53L8CX_POWER_DEEP_SLEEP:
+			vl53l8cx_set_power_mode(
+				&data->vl53l8cx_private_config,
+				val->val1
+			);
+			return 0;
+		default:
+			return -EINVAL;
+		}
+
+	case SENSOR_ATTR_VL53L8CX_TARGET_ORDER:
+		switch (val->val1) {
+		case SENSOR_ATTR_VL53L8CX_TARGET_CLOSEST:
+		case SENSOR_ATTR_VL53L8CX_TARGET_STRONGEST:
+			vl53l8cx_set_target_order(
+				&data->vl53l8cx_private_config,
+				val->val1
+			);
+			return 0;
+		default:
+			return -EINVAL;
+		}
+
+	case SENSOR_ATTR_VL53L8CX_VHV_REPEAT_COUNT:
+		vl53l8cx_set_VHV_repeat_count(
+			&data->vl53l8cx_private_config,
+			val->val1
+		);
+		return 0;
+	
 	default:
 		return -ENOTSUP;
 	}
@@ -93,12 +134,13 @@ static int vl53l8cx_attr_get(const struct device *dev,
 {
 	struct vl53l8cx_inst_data *data = dev->data;
 	uint8_t tmp_u8;
+	uint32_t tmp_u32;
 
 	if (chan != SENSOR_CHAN_ALL && chan != SENSOR_CHAN_DISTANCE) {
 		return -ENOTSUP;
 	}
 
-	switch (attr) {
+	switch ((int)attr) {
 	case SENSOR_ATTR_SAMPLING_FREQUENCY:
 		vl53l8cx_get_ranging_frequency_hz(
 			&data->vl53l8cx_private_config,
@@ -114,6 +156,42 @@ static int vl53l8cx_attr_get(const struct device *dev,
 			&tmp_u8
 		);
 		val->val1 = tmp_u8;
+		val->val2 = 0;
+		return 0;
+
+	case SENSOR_ATTR_VL53L8CX_RANGING_MODE:
+		vl53l8cx_get_ranging_mode (
+			&data->vl53l8cx_private_config,
+			&tmp_u8
+		);
+		val->val1 = tmp_u8;
+		val->val2 = 0;
+		return 0;
+
+	case SENSOR_ATTR_VL53L8CX_POWER_MODE:
+		vl53l8cx_get_power_mode (
+			&data->vl53l8cx_private_config,
+			&tmp_u8
+		);
+		val->val1 = tmp_u8;
+		val->val2 = 0;
+		return 0;
+
+	case SENSOR_ATTR_VL53L8CX_TARGET_ORDER:
+		vl53l8cx_get_target_order (
+			&data->vl53l8cx_private_config,
+			&tmp_u8
+		);
+		val->val1 = tmp_u8;
+		val->val2 = 0;
+		return 0;
+
+	case SENSOR_ATTR_VL53L8CX_VHV_REPEAT_COUNT:
+		vl53l8cx_get_VHV_repeat_count (
+			&data->vl53l8cx_private_config,
+			&tmp_u32
+		);
+		val->val1 = tmp_u32;
 		val->val2 = 0;
 		return 0;
 
@@ -327,7 +405,7 @@ static int vl53l8cx_driver_init(const struct device *dev)
 		LOG_ERR("GPIO port %s failed to set low", config->pwr.port->name);
 		return -ENODEV;
 	}
-#if 1
+
 	// GPIO rdy (read ready)
 	if (! gpio_is_ready_dt(&config->rdy)) {
 		LOG_ERR("GPIO port %s not ready", config->rdy.port->name);
@@ -349,7 +427,7 @@ static int vl53l8cx_driver_init(const struct device *dev)
 		LOG_ERR("Could not configure interrupt trigger (%d)", ret);
 		return ret;
 	}
-#endif
+
 	// I2C
 	if (!device_is_ready(config->i2c.bus)) {
 		LOG_ERR("I2C bus is not ready");
@@ -384,14 +462,14 @@ static int vl53l8cx_driver_init(const struct device *dev)
 
 	// TODO test ranging mode
 	// default is autonomous (good for power), continuous (good for perf)
-	ret = vl53l8cx_set_ranging_mode (
-		&data->vl53l8cx_private_config,
-		VL53L8CX_RANGING_MODE_CONTINUOUS
-	);
-	if (ret != 0) {
-		LOG_ERR("[%s] Failed to set ranging mode", dev->name);
-		return ret;
-	}
+	//ret = vl53l8cx_set_ranging_mode (
+	//	&data->vl53l8cx_private_config,
+	//	VL53L8CX_RANGING_MODE_CONTINUOUS
+	//);
+	//if (ret != 0) {
+	//	LOG_ERR("[%s] Failed to set ranging mode", dev->name);
+	//	return ret;
+	//}
 
 	// repeat count to trigger temp calibration "takes few msec"
 	ret = vl53l8cx_set_VHV_repeat_count (

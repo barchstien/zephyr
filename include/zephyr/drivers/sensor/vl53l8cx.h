@@ -12,15 +12,31 @@
 
 /** 
  * Minimum size required to read from HW
- * 1 byte (num of zone) + 4 bytes timestamp msec + ST defined struct size
+ * 1 byte (zone cnt 16/64) + 4 bytes timestamp msec + ST defined struct size
  * @see vl53l8cx_platform.h to reduce size of ST defined struct
  */
 #define VL53L8CX_SENSOR_READ_BLOCK_SIZE (1 + 4 + sizeof(VL53L8CX_ResultsData))
 
-// TODO add attributes:
-//  - autonomous vs continuous mode
-//  - power modes
-//  - target order
+#define SENSOR_ATTR_VL53L8CX_RESOLUTION_4X4 VL53L8CX_RESOLUTION_4X4
+#define SENSOR_ATTR_VL53L8CX_RESOLUTION_8X8 VL53L8CX_RESOLUTION_8X8
+
+/**
+ * Custom sensor attributes
+ */
+enum sensor_attribute_vl53l8cx {
+	SENSOR_ATTR_VL53L8CX_RANGING_MODE = SENSOR_ATTR_PRIV_START,
+	SENSOR_ATTR_VL53L8CX_POWER_MODE,
+	SENSOR_ATTR_VL53L8CX_TARGET_ORDER,
+	SENSOR_ATTR_VL53L8CX_VHV_REPEAT_COUNT
+};
+
+#define SENSOR_ATTR_VL53L8CX_RANGING_AUTONOMOUS VL53L8CX_RANGING_MODE_AUTONOMOUS
+#define SENSOR_ATTR_VL53L8CX_RANGING_CONTINUOUS VL53L8CX_RANGING_MODE_CONTINUOUS
+#define SENSOR_ATTR_VL53L8CX_POWER_WAKE_UP VL53L8CX_POWER_MODE_WAKEUP
+#define SENSOR_ATTR_VL53L8CX_POWER_SLEEP VL53L8CX_POWER_MODE_SLEEP
+#define SENSOR_ATTR_VL53L8CX_POWER_DEEP_SLEEP VL53L8CX_POWER_MODE_DEEP_SLEEP
+#define SENSOR_ATTR_VL53L8CX_TARGET_CLOSEST VL53L8CX_TARGET_ORDER_CLOSEST
+#define SENSOR_ATTR_VL53L8CX_TARGET_STRONGEST VL53L8CX_TARGET_ORDER_STRONGEST
 
 struct vl53l8cx_result_data {
 	struct sensor_data_header header;
