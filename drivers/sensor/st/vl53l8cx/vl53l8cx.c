@@ -460,27 +460,6 @@ static int vl53l8cx_driver_init(const struct device *dev)
 	}
 	data->num_of_zone = tmp_u8;
 
-	// TODO test ranging mode
-	// default is autonomous (good for power), continuous (good for perf)
-	//ret = vl53l8cx_set_ranging_mode (
-	//	&data->vl53l8cx_private_config,
-	//	VL53L8CX_RANGING_MODE_CONTINUOUS
-	//);
-	//if (ret != 0) {
-	//	LOG_ERR("[%s] Failed to set ranging mode", dev->name);
-	//	return ret;
-	//}
-
-	// repeat count to trigger temp calibration "takes few msec"
-	ret = vl53l8cx_set_VHV_repeat_count (
-		&data->vl53l8cx_private_config,
-		15 * 60 // 1min at 15Hz
-	);
-	if (ret != 0) {
-		LOG_ERR("[%s] Failed to set VHV repeat count mode", dev->name);
-		return ret;
-	}
-
 	LOG_INF("[%s] Initialized", dev->name);
 	return 0;
 }
