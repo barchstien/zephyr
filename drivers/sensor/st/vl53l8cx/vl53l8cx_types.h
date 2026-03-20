@@ -38,14 +38,18 @@ struct vl53l8cx_inst_data {
 
     uint8_t num_of_zone;
 
-    /** Call back for INT, aka ready to read */
-    struct gpio_callback rdy_cb;
-
     /** Submitted upon interrupt */
     atomic_ptr_t pending_sqe;
 
-    /** Taken on interrupt */
+    /** Taken on interrupt, to stamp incoming smaple */
     atomic_t last_interrupt_timestamp;
 
     bool is_streaming;
+
+#ifdef CONFIG_VL53L8CX_INTERRUPT
+    /** Call back for INT, aka ready to read */
+    struct gpio_callback rdy_cb;
+#else
+    struct k_work_delayable ready_poll_work;
+#endif
 };

@@ -8,19 +8,38 @@ menuconfig VL53L8CX
 	default y
 	depends on DT_HAS_ST_VL53L8CX_ENABLED
 	depends on ZEPHYR_HAL_ST_MODULE
-	select I2C
 	select HAS_STLIB
+	select I2C
+	select RTIO_WORKQ
+	select SENSOR_ASYNC_API
 	help
 	  Enable driver for VL53L8CX I2C-based time of flight sensor.
 
 if VL53L8CX
 
-config VL53L8CX_INTERRUPT_MODE
-	bool "Use interrupt mode for VL53L8CX time of flight sensor"
+config VL53L8CX_INTERRUPT
+	bool "Use interrupt mode, instead of poll, for VL53L8CX time of flight sensor"
 	default y
 	depends on GPIO
 	help
 	  Enable interrupt mode for VL53L8CX time of flight sensor. Otherwise,
-	  the driver will use the polling method.
+	  the driver will poll via i2c.
+
+config VL53L8CX_LOW_LEVEL_API
+	bool
+	default n
+	help
+	  Provide to user, a pointer to the low level STM provided API
+
+config VL53L8CX_XCALIB
+	bool "Enable Xtalk calibration"
+	select VL53L8CX_LOW_LEVEL_API
+	help
+	  Add Xtalk calibration, from low level STM provided API
+
+# TODO xcalib
+# TODO sensor motion
+# TODO get access to low level api ?
+
 
 endif # VL53L8CX

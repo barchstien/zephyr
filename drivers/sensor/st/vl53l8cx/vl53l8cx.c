@@ -36,6 +36,10 @@
 
 #define MAX_DISTANCE_M 4
 
+#ifndef CONFIG_VL53L8CX_INTERRUPT
+#define VL53L8CX_POLL_INTERVAL_MSEC 40	// TODO move to device tree ??
+#endif
+
 LOG_MODULE_REGISTER(vl53l8cx, CONFIG_SENSOR_LOG_LEVEL);
 
 static int vl53l8cx_attr_set(const struct device *dev,
@@ -208,8 +212,8 @@ void vl53l8cx_submit_sync(struct rtio_iodev_sqe *iodev_sqe)
 	const struct device *dev = cfg->sensor;
 	struct vl53l8cx_inst_data *data = dev->data;
 
-
 	if (FIELD_GET(RTIO_SQE_CANCELED, iodev_sqe->sqe.flags)) {
+		// stop streaming
 		atomic_ptr_set(&data->pending_sqe, NULL);
 		vl53l8cx_stop_ranging(&data->vl53l8cx_private_config);
 		data->is_streaming = false;
@@ -247,13 +251,13 @@ static void vl53l8cx_submit(const struct device *sensor, struct rtio_iodev_sqe *
     const struct sensor_read_config *cfg = iodev_sqe->sqe.iodev->data;
 
 	// Set pending sqe if it's not already set
-	// rtio submit happens in "data ready" interrupt handler
+	// rtio submit happens in vl53l8cx_ready_callback
 	if (false == atomic_ptr_cas(&data->pending_sqe, NULL, iodev_sqe)) {
 		if (cfg->is_streaming) {
-			LOG_WRN("SQE already streaming");
+			LOG_WRN("Already streaming, incoming sqe ignored");
 		}
 		else {
-			LOG_WRN("SQE already pending");
+			LOG_WRN("Already waiting for pending sqe, incoming sqe is ignored");
 		}
 		rtio_iodev_sqe_err(iodev_sqe, -EBUSY);
 		return;
@@ -261,7 +265,6 @@ static void vl53l8cx_submit(const struct device *sensor, struct rtio_iodev_sqe *
 
 	// stream start
 	if (cfg->is_streaming && !data->is_streaming) {
-		LOG_INF(" -- Start ranging stream");
 		vl53l8cx_start_ranging(&data->vl53l8cx_private_config);
 		data->is_streaming = true;
 	}
@@ -269,7 +272,59 @@ static void vl53l8cx_submit(const struct device *sensor, struct rtio_iodev_sqe *
 	if (!cfg->is_streaming) {
 		vl53l8cx_start_ranging(&data->vl53l8cx_private_config);
 	}
+
+#ifndef CONFIG_VL53L8CX_INTERRUPT
+	// Poll, ie no interrupt
+	k_work_schedule(&data->ready_poll_work, K_MSEC(VL53L8CX_POLL_INTERVAL_MSEC));
+#endif
 }
+
+#ifdef CONFIG_VL53L8CX_INTERRUPT
+static void vl53l8cx_ready_callback(const struct device *dev,
+								  struct gpio_callback *cb,
+								  uint32_t pins)
+{
+	struct vl53l8cx_inst_data *data = CONTAINER_OF(cb, struct vl53l8cx_inst_data, rdy_cb);
+	struct rtio_iodev_sqe *sqe = NULL;
+
+	atomic_set(&data->last_interrupt_timestamp, k_uptime_get_32());
+	sqe = atomic_ptr_set(&data->pending_sqe, NULL);
+	if (sqe != NULL) {
+		struct rtio_work_req *req = rtio_work_req_alloc();
+		if (req == NULL) {
+			rtio_iodev_sqe_err(sqe, -ENOMEM);
+			return;
+		}
+		rtio_work_req_submit(req, sqe, vl53l8cx_submit_sync);
+	}
+}
+#else
+static void vl53l8cx_ready_poll_work(struct k_work *work)
+{
+	struct k_work_delayable *kwd = CONTAINER_OF(work, struct k_work_delayable, work);
+	struct vl53l8cx_inst_data *data = CONTAINER_OF(kwd, struct vl53l8cx_inst_data, ready_poll_work);
+	struct rtio_iodev_sqe *sqe = NULL;
+	uint8_t is_ready;
+
+	vl53l8cx_check_data_ready(&data->vl53l8cx_private_config, &is_ready);
+	if (is_ready == 0) {
+		k_work_schedule(&data->ready_poll_work, K_MSEC(VL53L8CX_POLL_INTERVAL_MSEC));
+	}
+	else {
+		// submit to RTIO
+		atomic_set(&data->last_interrupt_timestamp, k_uptime_get_32());
+		sqe = atomic_ptr_set(&data->pending_sqe, NULL);
+		if (sqe != NULL) {
+			struct rtio_work_req *req = rtio_work_req_alloc();
+			if (req == NULL) {
+				rtio_iodev_sqe_err(sqe, -ENOMEM);
+				return;
+			}
+			rtio_work_req_submit(req, sqe, vl53l8cx_submit_sync);
+		}
+	}
+}
+#endif
 
 static int vl53l8cx_decoder_get_frame_count(const uint8_t *buffer,
 		struct sensor_chan_spec channel,
@@ -353,27 +408,6 @@ static const struct sensor_driver_api vl53l8cx_api_funcs = {
 	.submit = vl53l8cx_submit
 };
 
-
-static void vl53l8cx_rdy_callback(const struct device *dev,
-								  struct gpio_callback *cb,
-								  uint32_t pins)
-{
-	struct vl53l8cx_inst_data *data = CONTAINER_OF(cb, struct vl53l8cx_inst_data, rdy_cb);
-	struct rtio_iodev_sqe *sqe = NULL;
-
-	atomic_set(&data->last_interrupt_timestamp, k_uptime_get_32());
-	sqe = atomic_ptr_set(&data->pending_sqe, NULL);
-	if (sqe != NULL) {
-		struct rtio_work_req *req = rtio_work_req_alloc();
-		if (req == NULL) {
-			rtio_iodev_sqe_err(sqe, -ENOMEM);
-			return;
-		}
-		rtio_work_req_submit(req, sqe, vl53l8cx_submit_sync);
-	}
-}
-
-
 static int vl53l8cx_driver_init(const struct device *dev)
 {
 	const struct vl53l8cx_config *config = dev->config;
@@ -406,6 +440,7 @@ static int vl53l8cx_driver_init(const struct device *dev)
 		return -ENODEV;
 	}
 
+#ifdef CONFIG_VL53L8CX_INTERRUPT
 	// GPIO rdy (read ready)
 	if (! gpio_is_ready_dt(&config->rdy)) {
 		LOG_ERR("GPIO port %s not ready", config->rdy.port->name);
@@ -416,7 +451,7 @@ static int vl53l8cx_driver_init(const struct device *dev)
 		LOG_ERR("GPIO port %s failed to set as input: %i", config->rdy.port->name, ret);
 		return ret;
 	}
-	gpio_init_callback(&data->rdy_cb, vl53l8cx_rdy_callback, BIT(config->rdy.pin));
+	gpio_init_callback(&data->rdy_cb, vl53l8cx_ready_callback, BIT(config->rdy.pin));
 	ret = gpio_add_callback(config->rdy.port, &data->rdy_cb);
 	if (ret < 0) {
 		LOG_ERR("Could not add gpio callback (%d)", ret);
@@ -427,6 +462,11 @@ static int vl53l8cx_driver_init(const struct device *dev)
 		LOG_ERR("Could not configure interrupt trigger (%d)", ret);
 		return ret;
 	}
+	LOG_INF("Interrupt configured");
+#else
+	k_work_init_delayable(&data->ready_poll_work, vl53l8cx_ready_poll_work);
+	LOG_INF("Poll k_work_delayable configured");
+#endif
 
 	// I2C
 	if (!device_is_ready(config->i2c.bus)) {
@@ -434,6 +474,7 @@ static int vl53l8cx_driver_init(const struct device *dev)
 		return -ENODEV;
 	}
 
+	// Strangely, ST low level AP isn't doing that on its own..
 	ret = VL53L8CX_Reset_Sensor(&data->vl53l8cx_private_config.platform);
 	if (ret != 0) {
 		LOG_ERR("[%s] Failed to reset", dev->name);
